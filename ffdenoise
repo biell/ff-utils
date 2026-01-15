@@ -1,0 +1,22 @@
+#!/bin/sh
+
+OUT="$1"; shift
+IN="$1"; shift
+
+CHAIN=(
+	afftdn=nf=-25
+	highpass
+	lowpass
+	afwtdn
+	dialoguenhance
+	volume=volume=2
+	"$@"
+)
+FILTER="${CHAIN[@]}"
+
+if [ -r "$OUT" ]; then
+	echo $OUT already exists 1>&2
+	exit 1
+fi
+
+ffmpeg -i "$1" -c:v copy -af "${FILTER// /,}" "$2"

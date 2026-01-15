@@ -1,0 +1,2065 @@
+#!/usr/bin/perl
+
+use FindBin;
+use lib "$ENV{'HOME'}/bin", "$ENV{'HOME'}/lib", $FindBin::Bin;
+
+=head1 NAME
+
+clips - Make a video file out of clips from other videos
+
+=cut
+
+my($VERSION)='$Id$';
+
+use List::Util;
+use Getopt::Long;
+use Data::Dumper;
+use Pod::Usage;
+use File::Temp;
+use FFUtils;
+
+=head1 SYNOPSIS
+
+clips [options] <out.mp4|-> <in1.mp4> <clip1> [...]
+
+=head2 Options
+
+=over 8
+
+=item -title=<text>
+
+Set the output file's C<TITLE> metadata to C<text>.
+
+=item -comment=<text>
+
+Set the output file's C<COMMENT> metadata to C<text>.
+
+=item -description=<text>
+
+Set the output file's C<DESCRIPTION> metadata to C<text>.
+
+=item -o <option> or -overlay=<option>
+
+When performing a video overlay use C<option> to affect the type and
+method of overlaying.  Three different kinds of overlay are possible
+depending on if C<option> is an integer, coordinates, or a color.
+
+=item -t <#> or -transition=<#>
+
+Change the default transition time for clip transitions from the default of
+C<0.8> seconds.
+
+=item -T <type> or -transition-type=<type>
+
+Change the default transition type from C<fade> to C<type>.  Transition
+type can either be specified using the one-letter abbreviations or the
+full name, as defined in L<ffmpeg-filters(1)>.
+
+=item -f <#> of -fade=<#>
+
+Change the default fade in and out time from C<3> seconds to C<#>.
+
+=item -s <#> or -speed=<#>
+
+Change the default for the C<speed> token from the default of 1 to C<#>.
+Note that this also changes the default starting speed for all videos.
+
+=item -v <#> or -volume=<#>
+
+Change the default for the C<volume> token from the default of 1 to C<#>.
+This option changes the default starting volume, also.
+
+=item -N or -normalize
+
+Run an audio normalize routine on all inputs.
+
+=item -r <W>:<H> or -resolution=<W>:<H>
+
+Force the output to be specifically resolution of WxH.  This is most
+convenient if you have videos of different resolutions that you want to
+merge into one.  However, it can also be used if you want to change the
+overall output resolution.  You can use C<:> or C<x> as the delimiter.
+
+=item -F <font> or -font=<font>
+
+When drawing text use C<font>.  This could be any font specification
+understood by L<ffmpeg(1)> and the L<ffmpeg-filters(1)> C<drawtext>
+filter.  What works best is to specify a path to a TureType (TTF) font
+file.  However, it can use supported names also (e.g. Sans).
+
+=item -R <#> or -rate=<#>
+
+Specify that the resulting frame rate should be <#>.
+
+=item -A or -audio-only
+
+Produce only the audio output, no video
+
+=item -P or -practice
+
+This option is just a synonym for C<-resolution=640:360 -rate=24>.
+
+=item -E <#> or -end=<#>
+
+End the video after C<#> time.  Time can be specified in any supported
+format.  This option is useful for testing just an initial portion of
+the video or to cut it off at a maximum time limit.
+
+=item -O <options> or -ffmpeg=<options>
+
+Pass through C<options> as arguments to the L<ffmpeg(1)> command.  Mostly,
+this is nice to specific which encoder, muxer, etc to use.  Note that
+this optin can be used multiple times, but also, any whitespace within
+the argument C<options> string will be used to seperate L<ffmpeg(1)>
+arguments.
+
+=item -print=<string>
+
+Display specific information about B<clips>, then exit.  The following
+values of C<string> are accepted:
+
+=over 8
+
+=item defaults - print defaults for command-line options
+
+=item order    - print the order filters will be run
+
+=item tree     - print only the data tree structure
+
+=item command  - print only the L<ffmpeg(1)> command
+
+=item usage    - print the B<clips> usage manual section
+
+=item help     - print the B<clips> manual
+
+=item examples - Print B<clips> examples
+
+=back
+
+=item -n or -dry-run
+
+Display information about what would be done, then exit.
+
+=item -d or -debug
+
+Display more information to the screen about processing.  Most notably,
+print the L<ffmpeg(1)> command to the screen before execution.  Often
+times, the C<-dry-run> option is a better choice, but you do you.
+
+=item -V or -version
+
+Display Version and exit.
+
+=item -e or -examples
+
+Print the B<EXAMPLES> section of the manual.  This section is the best
+place to go to to learn about different ways to run B<clips>.
+
+=item -h or -help
+
+Print a usage statement help information from the manual.
+
+=item -H or --manual
+
+Print full manual.
+
+=back
+
+=cut
+
+my(@OPTIONS)=qw(
+	title=s
+	comment=s
+	description=s
+	overlay|o=s
+	transition|transition-time|transitions|t=f
+	transition-type|transitiontype|ttype|T=s
+	fade|fade-time|fadetime|f=f
+	speed|speedup|tempo|s=f
+	volume|vol|v=f
+	normalize|normal|norm|N
+	resolution|res|geometry|r=s
+	rate|framerate|frame-rate|fps|R=f
+	font|F=s
+	audio-only|A
+	practice|P
+	end|E=s
+	ffmpeg|options|O=s@
+	print=s
+	dry-run|dryrun|n
+	debug|verbose|d+
+	version|V
+	examples|example|e
+	help|h
+	manual|H
+);
+my(%ARG)=(
+	'overlay'			=> 33,
+	'transition'		=> 0.8,
+	'transition-type'	=> 'fade',
+	'fade'			=> 3,
+	'speed'			=> 1,
+	'volume'			=> 1,
+);
+
+Getopt::Long::Configure('pass_through', 'bundling_override', 'ignore_case');
+unless(GetOptions(\%ARG, @OPTIONS)) {
+	pod2usage(-verbose => 1, -exitval => 1);
+}
+
+if($ARGV[0]=~m/^-\w/) {
+	&err(2, 'Unrecognized command-line parameter:', $ARGV[0]);
+}
+
+if($ARG{'print'}=~m/defaults/i) {
+	foreach my $key (sort(keys(%ARG))) {
+		printf("%16s = %s\n", $key, $ARG{$key});
+	}
+	exit(0);
+}
+
+my(@MPV)=qw(mpv --osd-fractions --msg-level=cplayer=no,statusline=status);
+my(@WATCH)=();
+
+my($DST)=shift;
+my($JFH, $JUNK);
+my(%SOURCES)=();
+my($ROOT)=undef;
+my(@INPUTS)=();
+my(@FFPROGRAM)=();
+
+if($ARG{'practice'}) {
+	$ARG{'resolution'}='640:360';
+	$ARG{'rate'}=24;
+}
+
+if($ARG{'audio-only'}) {
+	$ARG{'rate'}=0.1;
+}
+
+#Developer's note for filters:
+#Any `simple:video:*` or `simple:audio:*` filters should accept only one
+#input and produce only one output.  They will be chained together for you,
+#and should, therefore, not have labels and just return a sequence of
+#filters to be chained together.
+#
+#Any `complex:*` filters will not receive automated labels, and you need to
+#manage that yourself, along with updating $node->{'video'} and
+#$node->{'audio'}
+
+my(%M)=();	#Filter Match
+my(%F)=();	#Filter Functions
+
+sub debugtreesort {
+	my($hash)=@_;
+	my(%priority)=qw(
+		type      10
+		index     11
+		step      12
+		file      20
+		start     21
+		end       22
+		length    23
+		width     24
+		height    25
+		merge     30
+		timer     31
+		video     40
+		audio     41
+		f:a       50
+		f:v       51
+		f:x       52
+		parent    60
+	);
+
+	return([sort(
+		{ ($priority{$a}.$a||$a) cmp ($priority{$b}.$b||$b) } keys(%$hash)
+	)]);
+}
+
+sub debugcollapse {
+	my($string)=@_;
+	$string=~s/\s+/ /gs;
+	return($string);
+}
+
+sub treedump {
+	my($tree);
+
+	$Data::Dumper::Indent=1;
+	$Data::Dumper::Terse=1;
+	$Data::Dumper::Sortkeys=\&debugtreesort;
+	$tree=Dumper($ROOT);
+
+	$tree=~s/VAR1/ROOT/g;
+	$tree=~s/=> \!\!0,/=> 0,/g;
+	$tree=~s/=> \!\!1,/=> 1,/g;
+	$tree=~s/(\n\s+)(\[.+?\s+\])/$1.&debugcollapse($2)/ges;
+	$tree=~s/(=> \[\n\s+.{1,30}\n\s+\])/&debugcollapse($1)/ges;
+
+	print $tree, "\n";
+}
+
+#err just makes it simpler to print error messages and exit with a specific
+#error code.
+sub err {
+	my($code)=shift;
+
+	&treedump if($ARG{'debug'}>2);
+
+	print STDERR join(' ', @_), "\n";
+	exit($code);
+}
+
+#fmt takes an extended `sprintf` string with pound-sign (#) style macros.
+#These are substituted in first IF the second argument is a hash ref which
+#contains a map of those macros.  After (and otherwise) a normal sprintf
+#is run on remaining arguments (if any).
+sub fmt {
+	my($fmt)=shift;
+	my($macro)=(ref($_[0]) eq 'HASH')?shift:undef;
+	my($out)=undef;
+
+	if($macro) {
+		1 while($fmt=~s/(?<!#)#((\w)|{(\w+)})/$macro->{$2||$3}/g);
+		s/##/#/g;
+	}
+
+	if(@_) {
+		$out=sprintf($fmt, @_);
+		$out=~s/(\d+\.\d{6})/$1+0/eg; #Even if fails, number is still valid
+		return($out);
+	} else {
+		return($fmt);
+	}
+}
+
+sub even {
+	my($i)=int($_[0]);
+	return(i + $i%2);
+}
+
+sub copykeys {
+	my($source, $target, @keys)=@_;
+
+	foreach my $key (@keys) {
+		$target->{$key}=$source->{$key};
+	}
+}
+
+#This is kinda Linux specific, but it will fail through transparently
+#if `fc-match` doesn't exist.  We could add more OS support, though.
+my(@fontstyle)=qw(
+	Roman Sans Book Italic Oblique SemiCondensed Condensed Demi
+);
+my(@fontweight)=qw(
+	ExtraLight Thin Light Regular Medium SemiBold Bold ExtraBold Black
+);
+sub findfont {
+	my($font)=join(' ', @_);
+	my(@fcmatch)=('fc-match', '-f', '%{file}');
+	my($style)=join('|', @fontstyle);
+	my($weight)=join('|', @fontweight);
+	my(@style, @weight, @query);
+	my($find);
+
+	return($font, undef) if(-r $font);
+
+	s/(italic)s/$1/i;
+
+	while($font=~s/\s*((\b($style)\b\s?)+)//i) {
+		push(@style, $1);
+	}
+	while($font=~s/\s*((\b($weight)\b\s?)+)//i) {
+		push(@weight, $1);
+	}
+	$font=~s/^\s+//; $font=~s/\s+$//;
+	push(@query, "$font");
+	push(@query, "style=@style") if(@style);
+	push(@query, "weight=@weight") if(@weight);
+
+	push(@fcmatch, "'".join(':', @query)."'");
+	$find=`@fcmatch`;
+	print join(' ', @fcmatch), "\nFound: ", $find, "\n" if($ARG{'debug'});
+	
+	if(-r $find) {
+		return($find, undef);
+	}
+
+	return(undef, $font);
+}
+
+=head1 DESCRIPTION
+
+The purpose of B<clips> is to create video files from other video files
+using L<ffmpeg(1)>.  The syntax is meant to be intuitive and lightweight,
+two things which cannot be said about L<ffmpeg(1)>'s syntax.  This tool
+is great for amateur videographers who want to put up a YouTube video or
+just create a clip from their phone to post to reddit for help troubleshooting
+something. Specifying a time is a core part of B<clips>, and all time
+specifications adhere to the syntax outlined in L<ffmpeg-utils(1)>.
+
+This is not meant to be a user-friendly tool and replace high-end video
+editing software.  It has lots of defaults for audio normalization which
+are fine for use as a basic software tool.  All audio channels are merged
+down to the front two stereo channels.  This leaves room to easilly go in
+afterwards to layer a voice track and background music really easilly.
+
+If you need to remove/change/add to the C<ffmpeg> command, you can always
+run B<clips> with the C<-n> or C<-dry-run> command-line options to see the
+command which would have been executed.  Then, feel free to edit that for
+any necessary changes.
+
+B<clips> assumes all files are at the same resolution and keeps that
+resolution for the final product.  As, the tool is most often used on a
+single file, this will be clearly the case.  However, if you have multiple
+files of different resolutions, or you would like the final product to be
+a specific resolution, then you can use the C<-resolution> command-line
+option to specify a resolution.  However, please note that B<clips> doesn't
+play with aspect ratios.  If the files do not conform to the desired
+ratio, then the output will be padded with black bars.  The C<scale>
+(see below) token can also be used to fix any specific segments.
+
+=head2 Transitions
+
+One cool feature of B<clips> is that it can transition (aka fade) between
+clips.  Both audio and video are faded together.  You can specifiy a
+video transition style; however, audio transition is hard-coded.
+When using transitions, a set of short-codes is supported or transitions
+can be listed using their full names.  The following short-codes are
+supported:
+
+=over 8
+
+=item f - fade
+
+=item g - fadegrays
+
+=item d - dissolve
+
+=item p - pixelize
+
+=item b - fadeblack
+
+=item z - zoomin
+
+=item o - circleopen
+
+=item U - slideup
+
+=item D - slidedown
+
+=item L - slideleft
+
+=item R - slideright
+
+=back
+
+=cut
+
+my(%TRANSITION)=(
+	'f'	=> 'fade',
+	'g'	=> 'fadegrays',
+	'd'	=> 'dissolve',
+	'p'	=> 'pixelize',
+	'b'	=> 'fadeblack',
+	'z'	=> 'zoomin',
+	'o'	=> 'circleopen',
+	'U'	=> 'slideup',
+	'D'	=> 'slidedown',
+	'L'	=> 'slideleft',
+	'R'	=> 'slideright',
+);
+
+
+=head2 Time Format
+
+Specifying times is critical to using B<clips>.  And the syntax follows
+L<ffmpeg(1)> time specification grammar.  Times can be specified as
+floating-point numbers in total seconds (e.g. 345.963) or in the standard
+human readable format (e.g. 6:45.963) which may optionally include minutes
+and hours.  In all cases, fractions are optional, but if you don't specify
+them, then ffmpeg will just select the closest frame (and that may not be
+what you want).
+
+=head2 Tokens
+
+After the output file is specified, each command-line argument is a token
+which is processed to affect the final rendering.  The following tokens
+are supported:
+
+=over 8
+
+=item <filename>
+
+Any filename specified after the output file (and you need to do this at
+least once) will mean that any clips specified after this file will come
+from it.  You can change the filename as many times as you want, and you
+can come back and repeat at filename if you wish.
+
+=item fps[/framerate]
+
+Set the Frames Per Second to a specified value, or the default as
+defined globally via the C<-R> or C<-rate> command-line options.
+
+=cut
+
+$M{'simple:video:fps'}='fps/?([\d./]*)';
+$F{'simple:video:fps'}=sub {
+	my($node, $fps)=@_;
+
+	$fps||=$ARG{'rate'};
+
+	if($fps != $SOURCES{$node->{'file'}}{'framerate'}) {
+		return(&fmt('fps=fps=%f,settb=AVTB', $fps));
+	}
+};
+
+=item text[/color][/fontsize][/duration][/position]</string>
+
+Display C<string> over the image.  The defaults for this are to use
+a large, black text in the center of the screen for the duration of
+the video.  Arguments can be supplied in any order, and B<clips>
+will look at the argument to decide which type it is.  Arguments
+left off will use defaults.  B<clips> attempts to recognize arguments
+in the following order.
+
+Note that many of these arguments may be mathmatical formulas.  AND, a
+slash symbol (/) is our seperator.  When dividing, either escape the
+symbol (e.g. C<\/>) or instead use the functional notation
+C<div(h-text_h,2)>
+
+=over 8
+
+=item color
+
+The Color may be specified either in the hexidecimal C<#000000> or using
+standard color names listed in L<ffmpeg-utils(1)>.  After the color name
+or number, an at symbol (@) may come with a number between C<0> and
+C<1> to specify the alpha component.  Following normal convention, C<0>
+is fully transparent and C<1> is solid.  Additionally, the hexidecmal
+notation may contain 8 numbers, with the last two specifying the alpha
+using standard hexidecimal color notation.
+
+=item fontsize
+
+The fontsize is either a number followed by the letters C<pt> (e.g. C<96pt>)
+or a suported L<ffmpeg-filters(1)> C<drawtext> formula followed by C<pt>
+(e.g. C<(h\/10)pt>).
+
+=item duration
+
+By default, text will be positioned over the entire video segment.  To
+limit that, use this argument.  It should be a C<time> format, the same
+as a segment syntax.  Just like segments, a syntax like C<0:04.030-> would
+go form 4.030 seconds to the end of the video segment.  Note that this is
+based on the video stream, and not segment definition.  If you would like
+to display text in a video segment defined as C<1:03.390-4:34.960> for
+a period of 10 to 2 seconds prior to the end of the video segment, then
+the duration would be: C<3:41.630-3:39.630>.  This is necessary as text
+may be applied to composite video streams, and this is the only logically
+consistant way to specify times.
+
+=item position
+
+The position can be something as simple as specifying the top left corner
+of the text box as 100x100 pixels from the image top left corner with
+C<100:100>, to using negative numbers to specify distance from other edges
+(e.g. C<10,-10> would make the bottom left corner of the text box be 10
+pixels from the left side and 10 pixels up from the bottom of the image).
+
+Or, you can use one of six nemonics:  C<left>, C<middle>, C<right> and
+C<top>, C<center>, C<bottom> to look like C<bottom:right>.
+
+Lastly, you have pretty much full access to the L<ffmpeg-filters(1)>
+drawtext C<x=> and C<y=> parameters (which includes the ability to move
+text using the C<t> (time) variable.
+
+Note also, that C<text> comes before C<scale> in processing, so use the
+position on the original segment size, ranther the the size as a result
+of the C<scale> token.  While this may not seem ideal in all situations,
+it is helpful for using the original size to plan and for debugging or
+"practice" mode.  If you need this to work otherise, just group it like
+C<text/-256:64 { scale/1920:1080 1:00-2:00 }>.
+
+=item string
+
+This is your text.  It will be quoted, so shouldn't have to worry about any
+special characters except for slash (/) character used to seperate
+arguments.
+
+=back
+
+=cut
+
+$M{'simple:video:text'}='text/?(.*)(?<!\\\)/(.*)';
+$F{'simple:video:text'}=sub {
+	my($node, $args, $text)=@_;
+	my($drawtext)='drawtext=';
+	my(%coords)=(
+		'top'	=> 'h*0.01',
+		'center'	=> '(h-text_h)/2',
+		'bottom'	=> 'h*0.99-text_h',
+		'left'	=> 'w*0.01',
+		'middle'	=> '(w-text_w)/2',
+		'right'	=> 'w*0.99-text_w',
+	);
+	my(%params)=(
+		'fontcolor'	=> 'black@0.9',
+		'fontsize'	=> 'h/8',
+		'x'			=> $coords{'middle'},
+		'y'			=> $coords{'center'},
+	);
+
+	if($ARG{'font'}) {
+		($params{'fontfile'}, $params{'font'})=&findfont($ARG{'font'});
+	}
+
+	foreach(split(m|(?<!\\)/|, $args)) {
+		s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|$1/$2|g;
+
+		if(m/^(#[\da-f@]{6,8}|[a-z]+@[\d.]+|[a-z]+)$/i) {
+			$params{'fontcolor'}=$1;
+		} elsif(m/^(.+)pt$/i) {
+			$params{'fontsize'}=$1;
+		} elsif(m/^([\d.:]+)-([\d.:]+)?$/) {
+			$params{'enable'}=&fmt('between(t,%f,%f)',
+				FFUtils::time2secs($1),
+				FFUtils::time2secs($2 || $node->{'length'}));
+		} elsif(m|^([\w()*\\/+-]+)[:x]([\w()*\\/+-]+)$|i) {
+			$params{'x'}=$1;
+			$params{'y'}=$2;
+
+			if(exists($coords{$params{'x'}})) {
+				if($coords{$params{'x'}}=~m/w/) {
+					$params{'x'}=$coords{$params{'x'}};
+				} else {
+					&err(11, 'Oops, you specified a height where you needed a width');
+				}
+			}
+			if(exists($coords{$params{'y'}})) {
+				if($coords{$params{'y'}}=~m/h/) {
+					$params{'y'}=$coords{$params{'y'}};
+				} else {
+					&err(11, 'Oops, you specified a width where you needed a height');
+				}
+			}
+
+			$params{'x'}="w-text_w+$params{'x'}" if($params{'x'}<0);
+			$params{'y'}="h-text_h+$params{'y'}" if($params{'y'}<0);
+		} else {
+			&err(11, 'drawtext argument not understood:', $_);
+		}
+	}
+
+	foreach my $key (keys(%params)) {
+		$drawtext.="$key='$params{$key}':";
+	}
+	$text=~s|\\/|/|g;
+	$drawtext.=sprintf("text='%s'", $text);
+
+	return($drawtext);
+};
+
+=item crop/W:H:X:Y
+
+Crop the next clip to be C<W> wide, C<H> tall, and start the top-left corner
+of the rectangle at coordinates C<X>, C<Y>.  Unlike most tokens, there is no
+defaults, and so an argument is required.  Negative C<X> or C<Y> coordinates
+will orient the opposite edge from the opposite side of the image.
+
+You can basically use any non-numeric character to seperate the width, height,
+and coordinates.
+
+=cut
+
+$M{'simple:video:crop'}='crop/(\d+)\D(\d+)\D([\d+-]+)\D([\d+-]+)';
+$F{'simple:video:crop'}=sub {
+	my($node, $w, $h, $x, $y)=@_;
+
+	if($x<0) {
+		$x+=$node->{'width'}-$w;
+	}
+	if($y<0) {
+		$y+=$node->{'height'}-$h;
+	}
+
+	if($w+$x > $node->{'width'}) {
+		&err(6, "Cannot crop outside the boundary of the input, too wide.");
+	} elsif($h+$y > $node->{'height'}) {
+		&err(6, "Cannot crop outside the boundary of the input, too tall.");
+	} elsif($w<2 || $h<2) {
+		&err(6, "minimum supported height or width is 2px.");
+	}
+
+	$node->{'width'}=$w;
+	$node->{'height'}=$h;
+
+	return(&fmt('crop=%d:%d:%d:%d', $w, $h, $x, $y));
+};
+
+=item scale[/H:W]
+
+Scale the next video to the default height and width, or what is specified
+with the token.
+
+=cut
+
+$M{'simple:video:scale'}='scale/?([\dx:]*)';
+$F{'simple:video:scale'}=sub {
+	my($node)=$_[0];
+	my($resolution)=$_[1] || $ARG{'resolution'};
+	my($parent)=$node->{'parent'};
+	my($w, $h)=split(m/[x:]/i, $resolution);
+	my($scale)='scale=%d:%d:force_original_aspect_ratio=decrease';
+	my($pad)='pad=%d:%d:(ow-iw)/2:(oh-ih)/2';
+	my(@scale)=();
+
+	if($parent && $parent->{'type'} eq 'group' && $parent->{'merge'} ne 'c') {
+		if($parent->{'merge'} eq 'h') {
+			$node->{'width'}=&even($node->{'width'}*$h/$node->{'height'});
+			$node->{'height'}=$h;
+		} elsif($parent->{'merge'} eq 'v') {
+			$node->{'height'}=&even($node->{'height'}*$w/$node->{'width'});
+			$node->{'width'}=$w;
+		} else {
+			&err(5, 'Unknown group merge function:', $parent->{'merge'});
+		}
+
+		return(&fmt($scale, $node->{'width'}, $node->{'height'}));
+	} elsif($node->{'length'}!=$w || $node->{'height'}!=$h) {
+		$node->{'length'}=$w;
+		$node->{'height'}=$h;
+		return(
+			&fmt($scale, $w, $h),
+			&fmt($pad, $w, $h)
+		);
+	}
+};
+
+=item flip[/<h|v>]
+
+Flip the video.  The default is a horizontal flip, but specifying an argument
+of C<v> will perform a vertical flip.
+
+=cut
+
+$M{'simple:video:flip'}='flip/?([vh]*)';
+$F{'simple:video:flip'}=sub {
+	my($node, $type)=@_;
+
+	return(&fmt('%sflip', $type || 'h'));
+};
+
+=item fade-in[/time]
+
+Perform a fade in for your video.  Technically, this feature can be used
+anywhere on the commandline (except for as the last argument) but it makes
+the most sense when used as the first argument.  The default is 3 seconds,
+but that can be altered (e.g C<fade-in/2.2> would fade in for 2.2 seconds.
+
+Note that any string that starts with C<fade> and ends with C<in> will work
+(e.g. fadein, fade:in, etc.).
+
+=item fade-out[/time]
+
+This is basically the same as C<fade-in> except it fades out.  It should
+not be used as the first argument.  Uniary tokens should always come before
+clip they affect; however, there is one exception when C<fade-out> is the very
+last argument of the command, then it will apply to the clip directly before 
+it.
+
+=cut
+
+$M{'simple:video:fade'}='fade.*(in|out)/?([\d.]*)';
+$F{'simple:video:fade'}=sub {
+	my($node, $type, $length)=@_;
+	my($fade)='fade=t=%s:st=%f:d=%f';
+
+	$length||=$ARG{'fade'};
+
+	if($type=~m/in/i) {
+		return(&fmt($fade, 'in', 0, $length));
+	} else {
+		return(&fmt($fade, 'out', $node->{'length'}-$length, $length));
+	}
+};
+
+$M{'simple:audio:fade'}='fade.*(in|out)/?([\d.]*)';
+$F{'simple:audio:fade'}=sub {
+	my($node, $type, $length)=@_;
+	my($fade)='afade=t=%s:st=%f:d=%f:curve=qua';
+
+	$length||=$ARG{'fade'};
+
+	if($type=~m/in/i) {
+		return(&fmt($fade, 'in', 0, $length));
+	} else {
+		return(&fmt($fade, 'out', $node->{'length'}-$length, $length));
+	}
+};
+
+=item blur-in[/time]
+
+Fade into the video with a blur effect.  The video will start very blury
+and become crisp over C<time> seconds.  The default duration for this
+effect mirrors the C<fade-in> token, with the same command-line parameter
+controls.  Note that the image is darkened slightly at the start of the
+blur to give it a more familiar feel.
+
+=item blur-out[/time]
+
+Fade out from  the video with a blur effect.  The video will start crisp
+and become blury over C<time> seconds.  It works the same as C<blur-in>,
+just backwards.
+
+Note that this is a little funky in the way that it processes the blur-out,
+and so the blur-out may override/erase other filters.  Burying it in two
+layers of groupings C<{ { ... blur-out } }> will ensure it is encapsulated
+properly.  This is partially due to the forced order in which filters are
+applied (see C<clips -print=order>) and partly to do with the way the
+blur-out is blended together.
+
+=cut
+
+#This is still buggy when used with other filters, something to work on
+
+$M{'complex:blur'}='blur.*(in|out)/?([\d.]*)';
+$F{'complex:blur'}=sub {
+	my($node, $type, $length)=@_;
+	my($vb, $ab)=&next_labels($node);
+	my($vd, $ad)=&next_labels($node);
+	my($vout, $aout)=&next_labels($node);
+	my(@blur)=();
+
+	$length||=$ARG{'fade'};
+
+	if($type=~m/in/i) {
+		push(@blur, &fmt('#{I}afade=t=#{T}:st=#{S}:d=#{L}:curve=#{C}#{O}', {
+				'I'	=> $node->{'audio'},
+				'T'	=> 'in',
+				'S'	=> 0,
+				'L'	=> $length,
+				'C'	=> 'qua',
+				'O'	=> $aout,
+			}));
+
+		push(@blur, &fmt('#{I}gblur=sigma=#{R}:#{E}#{O}', {
+				'I' => $node->{'video'},
+				'R' => 40,
+				'E' => "enable=lte(t\\,$length)",
+				'O' => $vb,
+			}));
+
+		push(@blur, &fmt('#{I1}#{I2}blend=#{T}:#{E},eq=#{B}:#{C}:#{E}#{O}', {
+				'I1' => $node->{'video'},
+				'I2' => $vb,
+				'S'	=> 0,
+				'L'	=> $length,
+				'R'	=> "((T-#{S})/#{L})",
+				'T'	=> "all_expr=(T/#{L})*A+(1-T/#{L})*B",
+				'B'	=> "brightness=t/(#{L}*10)-0.1",
+				'E'	=> "enable=lte(t\\,#{L})",
+				'C'	=> 'eval=frame',
+				'O'	=> $vout,
+			}));
+	} else {
+		$start=$node->{'length'}-$length;
+
+		push(@blur, &fmt('#{I}afade=t=#{T}:st=#{S}:d=#{L}:curve=#{C}#{O}', {
+				'I'	=> $node->{'audio'},
+				'T'	=> 'out',
+				'S'	=> $node->{'length'}-$length,
+				'L'	=> $length,
+				'C'	=> 'qua',
+				'O'	=> $aout,
+			}));
+
+		push(@blur, &fmt('#{I}gblur=sigma=#{R}:#E#{O}', {
+				'I'	=> $node->{'video'},
+				'R'	=> 40,
+				'E'	=> "enable=gte(t\\,$start)",
+				'O'	=> $vb,
+			}));
+
+		push(@blur, &fmt('#{I1}#{I2}blend=#{T}:#{E},eq=#{B}:#{C}:#{E}#{O}', {
+				'I1' => $vb,
+				'I2' => $node->{'video'},
+				'S'	=> $node->{'length'}-$length,
+				'L'	=> $length,
+				'R'	=> "((T-#{S})/#{L})",
+				'T'	=> "all_expr=#{R}*A+(1-#{R})*B",
+				'B'	=> "brightness=(#{S}-t)/(#{L}*10)",
+				'E'	=> "enable=gte(t\\,#{S})",
+				'C'	=> 'eval=frame',
+				'O'	=> $vout,
+			}));
+	}
+
+	$node->{'audio'}=$aout;
+	$node->{'video'}=$vout;
+
+	return(@blur);
+};
+
+=item denoise[/#]
+
+Apply an audio denoise to the next clip.  Note, that this token is very
+special in that it only applies to the very next clip after it.  Optionally,
+you can specify a volume function to the denoised audio, the default is
+C<2>.
+
+=cut
+
+$M{'simple:audio:denoise'}='denoise/?([\d.]*)';
+$F{'simple:audio:denoise'}=sub {
+	my($node, $volume)=@_;
+	my($denoise)=join(',', qw(
+		afftdn=nf=-25
+		highpass
+		lowpass
+		afwtdn
+		dialoguenhance
+		volume=%f
+	));
+
+	$volume||=2;
+
+	return(&fmt($denoise, $volume));
+};
+
+=item speed[/time]
+
+Change the default speed for subsequent clips to C<time> or the default
+if C<time> is omitted.  This number defaults to 1 (source time) and can
+be speed up with (e.g. 1.2) or slowed down by half (e.g. 0.5).  Both audio
+and video are adjusted appropriately.
+
+=cut
+
+$M{'complex:speed'}='speed/?([\d.]*)';
+$F{'complex:speed'}=sub {
+	my($node, $speed)=@_;
+	my($diff)=($node->{'length'}/$speed) - $node->{'length'};
+	my($vin)=$node->{'video'} || $node->{'parent'}[0]{'video'};
+	my($ain)=$node->{'audio'} || $node->{'parent'}[0]{'audio'};
+	my($vout, $aout)=&next_labels($node);
+	my(@speed)=();
+
+	$speed||=$ARG{'speed'};
+
+	push(@speed, &fmt('#{I}setpts=#{S}*PTS#{O}', {
+			'I'	=> $vin,
+			'S'	=> 1/$speed,
+			'O'	=> $vout
+		}));
+	push(@speed, &fmt('#{I}atempo=#{S}#{O}', {
+			'I'	=> $ain,
+			'S'	=> $speed,
+			'O'	=> $aout
+		}));
+
+	$node->{'video'}=$vout;
+	$node->{'audio'}=$aout;
+
+	return(@speed);
+};
+
+=item volume[/#]
+
+Change the default volume for subsequent clips to C<#> or the default
+if C<#> is omitted.  This number defaults to 1, which is useful to reset
+volume back to "original" volume.  Note that unless overridden, all volume
+is normalized  before this, so "original" is only sort-of a true statement.
+This token can be shortened all the way to just C<v>, for example, C<v/0>
+would mute the next segment.
+
+=cut
+
+$M{'simple:audio:volume'}='v[olume]*/?([\d.]*)';
+$F{'simple:audio:volume'}=sub {
+	my($node, $volume)=@_;
+
+	$volume||=$ARG{'volume'};
+
+	if($volume!=1) {
+		return(&fmt('volume=%f', $volume));
+	} else {
+		return();
+	}
+};
+
+=item normalize/[#]
+
+Run a set of basic normalize audio filters to the next segment.  If
+a number is specified, adjust the volume further by this number at the
+end of the filter chain.  This filter is great for audio with a lot of
+talking and/or background noise.  It is not recommended for music.
+
+=cut
+
+$M{'simple:audio:normalize'}='norm[alize]*/?([\d.]*)';
+$F{'simple:audio:normalize'}=sub {
+	my($node, $volume)=@_;
+
+	$volume||=$ARG{'volume'};
+
+	return(&fmt('%s,volume=%f', $FFUtils::NORMALIZE, $volume));
+};
+
+=item delay/<#>
+
+Add an audio delay of C<#> seconds to the next audio clip or the audio
+portion of the next video clip.  Note that this token is different from
+most others in that the argument is required and not optional.
+
+=cut
+
+$M{'simple:audio:delay'}='delay/([\d.]+)';
+$F{'simple:audio:delay'}=sub {
+	my($node, $delay)=@_;
+
+	return(&fmt('adelay=delays=%d:all=1', $delay*1000));
+};
+
+=item /[seconds][[/]type]
+
+Perform a transition.  A C</> by itself uses all the defaults.  A time format
+and/or a type can be used as an argument.  Examples are C</3.5>,
+C</3.5/d>, C</3.5/windlr>, C</L> which fade for the non-default 3.5 seconds,
+do so with a dissolve fade, do so with the wind left-to-right, and a standard
+0.8 seconds of left fade respectively.
+
+=cut
+
+$F{'complex:transition'}=sub {
+	my($node, $time, $type)=@_;
+	my($l, $r)=($node->{'tree'}[0], $node->{'tree'}[1]);
+	my($offset)=$l->{'length'}-$time;
+	my(@fade)=();
+
+	&copykeys($l => $node, 'width', 'height');
+	($node->{'video'}, $node->{'audio'})=&next_labels($node);
+
+	$type=$TRANSITION{$type} || $type;
+
+	push(@fade,
+		&fmt('#{IL}#{IR}acrossfade=d=#{D}:c1=#{C1}:c2=#{C2}#{O}', {
+				'IL'	=> $l->{'audio'},
+				'IR'	=> $r->{'audio'},
+				'D'	=> $time,
+				'C1'	=> 'cbr',
+				'C2'	=> 'cub',
+				'O'	=> $node->{'audio'}
+			}),
+		&fmt('#{IL}#{IR}xfade=transition=#{T}:offset=#{S}:duration=#{D}#{O}',{
+				'IL'	=> $l->{'video'},
+				'IR'	=> $r->{'video'},
+				'T'	=> $type,
+				'S'	=> $offset,
+				'D'	=> $time,
+				'O'	=> $node->{'video'}
+			}),
+	);
+
+	return(@fade);
+};
+
+=item %[/][option1][/option2][/option3]
+
+Overlay the video to the right on top of the video to the left.
+This token can take any combination of three options, seperated with
+C</> characters.
+
+If the optional integer C<n> is specified as a number between 0 and
+100, then this is used as the percentage of coverage for the left video.
+This defaults to C<66>, for an alpha configuration of C<0.66>. This is
+the default mode and produces an image where both inputs are blended
+together.
+
+If C<option> is of the form X:Y or XxY, then these will be the X and Y
+coordinates of the top left corner of the overlayed image.  This really only
+makes sense if the overlayed (left) image is smaller.
+
+Any other C<option> will be treated as an attempt to specify a color to
+be treated as an alpha color.  Examples are C<lime>, C<0x00FF00>, and
+C<#00FF00>.  The right images will be on top of the left image, with the
+left image visible everywhere the color (e.g. lime) is present, and the
+right image visible otherwise.  After the color, this option can be
+modified by two C<:> seperated arguments.  The first is the percentage
+similarity of he color which will be matched for transparence.  Generally,
+this should be in the C<0.01-0.05> range.  The second specifies how the
+color is blended as an alpha and should also generally be in the
+C<0.01-0.05> range.
+
+Note 1 - overlays can be chained, with the base image listed first, and
+subsequent overlays specified one after another; each building on top
+of the image before it.  They can also be chained with stacked segments.
+However, it should be noted that chaining overlays can slow down processing
+quite a bit.
+
+Note 2 - you can place a slash C</> character between the percent sign C<%>
+and options if you want, or you don't have to.
+
+=cut
+
+$F{'complex:overlay'}=sub {
+	my($node, $config)=@_;
+	my($main)=$node->{'tree'}[0];
+	my($over)=$node->{'tree'}[1];
+	my($alpha, $color, $position)=(undef, undef, 'x=0:y=0');
+	my($valpha, $junk)=&next_labels($node);
+	my(@overlay)=();
+
+	&copykeys($main => $node, 'width', 'height');
+	($node->{'video'}, $node->{'audio'})=&next_labels($node);
+
+	foreach my $option (split(m|/|, $config)) {
+		if($option=~m/^\d+$/) {
+			$alpha=$option;
+			if($alpha<0 || 100<$alpha) {
+				&err(8, 'Overlay alpha is out of proper range 0-100');
+			}
+		} elsif($option=~m/^(0x|#)([\da-f]{6})(:[:\d.]+)?$/i) {
+			$color="0x$1$2";
+		} elsif($option=~m/^[a-z](:[:\d.]+)?$/i) {
+			$color=$option;
+		} elsif($option=~m/^([\w+-]+)[:x]([\w+-]+)$/i) {
+			$position=&fmt('x=%d:y=%d', split(m/[x:]/i, $option));
+		}
+	}
+
+	push(@overlay,
+		&fmt('%s%samix=inputs=2:duration=shortest%s',
+			$main->{'audio'}, $over->{'audio'}, $node->{'audio'}),
+	);
+
+	if($color) {
+		push(@overlay,
+			&fmt('%schromakey=%s,colorchannelmixer=aa=%f%s',
+				$over->{'video'}, $color, $alpha/100, $valpha),
+
+			&fmt('%s%soverlay=shortest=1:%s%s',
+				$main->{'video'}, $valpha, $position, $node->{'video'}),
+		);
+	} elsif($alpha) {
+		push(@overlay,
+			&fmt('%sformat=yuva444p,colorchannelmixer=aa=%f%s',
+				$over->{'video'}, $alpha/100, $valpha),
+			&fmt('%s%soverlay=shortest=1:%s%s',
+				$main->{'video'}, $valpha, $position, $node->{'video'}),
+		);
+	} else {
+		push(@overlay,
+			&fmt('%s%soverlay=shortest=1:%s%s',
+				$main->{'video'}, $over->{'video'}, $position, $node->{'video'}),
+		);
+	}
+
+	return(@overlay);
+};
+
+=item {[/<h|v|c|a>] <...> }
+
+Create grouped segments.  Use this syntax to combine multiple files by
+either stacking them horizontally with C<hstack>, vertically with C<vstack>,
+in serial with C<concat>, or for audio overlay with C<amix>.
+Note that C<concat> is the default.  Audio merge uses the first video
+stream found in the group for video, and merges audio from all members
+of the group.
+
+Stack notes:
+the duration of the combination is based on the shortest sub entry.
+What goes inside the braces follows all other conventions for file
+inputs and command-line tokens.
+
+=cut
+
+$F{'complex:stack'}=sub {
+	my($node, $type)=@_;
+	my(@vin)=();
+	my(@ain)=();
+	my(@stack)=();
+
+	foreach my $sub (@{$node->{'tree'}}) {
+		push(@vin, $sub->{'video'});
+		push(@ain, $sub->{'audio'});
+	}
+
+	&copykeys($node->{'tree'}[0] => $node, 'width', 'height');
+	if($type eq 'h') {
+		$node->{'width'}=List::Util::sum(
+			map($_->{'width'}, @{$node->{'tree'}})
+		);
+	} elsif($type eq 'v') {
+		$node->{'height'}=List::Util::sum(
+			map($_->{'height'}, @{$node->{'tree'}})
+		);
+	} else {
+		&err(9, 'Stack', $type, 'not known.');
+	}
+
+	($node->{'video'}, $node->{'audio'})=&next_labels($node);
+
+	push(@stack, &fmt('#{Is}#{T}stack=inputs=#{N}:#{D}=1#{O}', {
+			'Is'	=> join('', @vin),
+			'T'	=> $type,
+			'N'	=> scalar(@vin),
+			'D'	=> 'shortest',
+			'O'	=> $node->{'video'},
+		}));
+	push(@stack, &fmt('#{Is}amix=inputs=#{N}:duration=#{D}#{O}', {
+			'Is'	=> join('', @ain),
+			'N'	=> scalar(@ain),
+			'D'	=> 'shortest',
+			'O'	=> $node->{'audio'}
+		}));
+
+	return(@stack);
+};
+
+$F{'complex:concat'}=sub {
+	my($node)=@_;
+	my($count)=0;
+	my(@inputs)=();
+	my(@concat)=();
+
+	&copykeys($node->{'tree'}[0] => $node, 'width', 'height');
+
+	foreach my $child (@{$node->{'tree'}}) {
+		push(@inputs, $child->{'video'}, $child->{'audio'});
+		$count++;
+	}
+
+	if($count==1) {
+		&copykeys($node->{'tree'}[0] => $node, 'video', 'audio');
+	} else {
+		($node->{'video'}, $node->{'audio'})=&next_labels($node);
+
+		push(@concat, &fmt('#{Is}concat=n=#{N}:v=#{V}:a=#{A}#{Ov}#{Oa}', {
+				'Is'	=> join('', @inputs),
+				'N'	=> $count,
+				'V'	=> 1,
+				'A'	=> 1,
+				'Ov'	=> $node->{'video'},
+				'Oa'	=> $node->{'audio'},
+			}));
+	}
+
+	return(@concat);
+};
+
+$F{'complex:aoverlay'}=sub {
+	my($node)=@_;
+	my($vout, $aout)=&next_labels($node);
+	my(@ain)=();
+
+	&copykeys($node->{'tree'}[0] => $node, 'video', 'width', 'height');
+	$node->{'audio'}=$aout;
+
+	foreach my $child (@{$node->{'tree'}}) {
+		push(@ain, $child->{'audio'});
+	}
+
+	return(&fmt('#{Is}amix=inputs=#{N}:duration=#{D}#{O}', {
+			'Is'	=> join('', @ain),
+			'N'	=> scalar(@ain),
+			'D'	=> 'first',
+			'O'	=> $node->{'audio'},
+		}));
+};
+
+=item ffmpeg/<v|a>/<filter>
+
+THERE BE DRAGONS HERE!  This token probably should not exist, and it is likely
+you will cause ffmpeg to exit with error when using it by making a simple
+mistake.  This token allows you to enter a simple filtergraph video or audio
+filter that would be supported by the L<ffmpeg(1)> C<-filter:a> or
+C<-filter:v>  (aka C<-af> or C<-vf>) command-line options which are suitable
+for a comma (,) chain.  These filters take a single stream as input and
+produce a single stream as output.  Look for the term "simple filtergraph"
+in the L<ffmpeg(1)> manual for more information.
+
+This filter runs after other video or audio simple filtergraphs.
+
+=cut
+
+$M{'simple:video:ffmpeg'}='ff[mpeg]*/v/(.*)';
+$F{'simple:video:ffmpeg'}=sub {
+	#Wait, what.  We are passing this straight through to ffmpeg?  Scary!
+	return($_[1]);
+};
+
+$M{'simple:audio:ffmpeg'}='ff[mpeg]*/a/(.*)';
+$F{'simple:audio:ffmpeg'}=sub {
+	#Wait, what.  We are passing this straight through to ffmpeg?  Scary!
+	return($_[1]);
+};
+
+=item <time>-<time>
+
+This is the clip you want incorporated into the video.  An example would be
+C<0:03.300-0:14.963> for an approximately 11 second clip.  Please note that
+if you specify a transition between clips, that you will lose fidelity on
+both video and audio during the transition time.  If you are trying to
+capture a sound or image and also want transitions, please make sure to
+make the clip long enough buffer from your critical content.
+
+=item <time>-
+
+A special form of the clip specification that goes until the end of the
+video file.  There is no analogous form for the start of a file, but you
+can just specify C<0-> to start at 0 seconds.
+
+=back
+
+=cut
+
+=head2 Processing Order
+
+Filters are applied using a specific order, regardless of where they were
+placed on the command-line prior to a clip or group.  To display this order,
+run C<clips -print=order>.
+
+=cut
+
+my(@ORDER)=qw(
+	complex:stack
+	complex:concat
+	complex:aoverlay
+	complex:overlay
+	complex:transition
+	complex:blur
+	complex:speed
+	simple:audio:denoise
+	simple:audio:normalize
+	simple:audio:volume
+	simple:audio:delay
+	simple:audio:fade
+	simple:audio:ffmpeg
+	simple:video:fps
+	simple:video:text
+	simple:video:crop
+	simple:video:scale
+	simple:video:flip
+	simple:video:fade
+	simple:video:ffmpeg
+);
+
+if($ARG{'print'}=~m/order/i) {
+	print join("\n", @ORDER), "\n";
+	exit(0);
+}
+
+my($I)=0;
+sub node {
+	my($i)=$I++;
+	my($node)={
+		'type'	=> 'root',
+		'length'	=> 0,
+		'index'	=> $i,
+		'step'	=> 0,
+		'tree'	=> [],
+		'timer'	=> 'sum',
+		'video'	=> undef,
+		'audio'	=> undef,
+		'f:v'	=> '',
+		'f:a'	=> '',
+		'f:x'	=> '',
+		@_
+	};
+
+	return($node);
+}
+
+sub insert_branch {
+	my($leaf, $branch)=@_;
+	my($trunk)=$leaf->{'parent'};
+	my(@attrs)=qw(parent video audio width height);
+
+	&copykeys($leaf => $branch, @attrs);
+
+	#N.B. the leaf is expected to be plucked from the trunk prior to call
+	push(@{$trunk->{'tree'}}, $branch);
+	push(@{$branch->{'tree'}}, $leaf);
+	return($leaf->{'parent'}=$branch);
+}
+
+sub next_labels {
+	my($node)=@_;
+
+	$node->{'step'}+=1;
+
+	return(
+		&fmt('[v%d.%d]', $node->{'index'}, $node->{'step'}),
+		&fmt('[a%d.%d]', $node->{'index'}, $node->{'step'}),
+	);
+}
+
+sub parse {
+	my($root)=&node(
+		'type'			=> 'root',
+		'complex:concat'	=> [],
+	);
+	my($cur)=$root;
+	my(%filt)=();
+	my($src)=undef;
+	my($stream)=0;
+	my(@args);
+
+	foreach(@_) {
+		if(-f $_) {
+			$src=$_;
+			$SOURCES{$src}={
+				'length'	=> FFUtils::duration($src),
+				'width'	=> FFUtils::width($src),
+				'height'	=> FFUtils::height($src),
+				'fps'	=> FFUtils::framerate($src),
+				'video'	=> FFUtils::has_video($src),
+				'audio'	=> FFUtils::has_audio($src),
+			};
+		} elsif(@args=m|^$M{'complex:speed'}|i) {
+			$filt{'complex:speed'}=[@args];
+		} elsif(@args=m|^$M{'complex:blur'}|i) {
+			$filt{'complex:blur'}=[@args];
+		} elsif(m|^/([\d.]*)/?([a-zA-Z]*)|) {	#Binary operator
+			my($last)=pop(@{$cur->{'tree'}}) ||
+				&err(7, 'Cannot transition from nothing.');
+			my($node)=&node(
+				'type'		=> 'transition',
+				'tree'		=> [],
+				'length'		=> -($1 || $ARG{'transition'}),
+
+				%filt,
+				
+				'complex:transition'	=> [
+								$1 || $ARG{'transition'},
+								$2 || $ARG{'transition-type'},
+							],
+			);
+
+			$cur=&insert_branch($last => $node);
+
+			%filt=();
+		} elsif(m|%/?(.*)|) {				#Binary operator
+			my($last)=pop(@{$cur->{'tree'}}) ||
+				&err(7, 'Cannot overlay nothing.');
+			my($node)=&node(
+				'type'		=> 'overlay',
+				'tree'		=> [],
+				'timer'		=> 'first',
+
+				%filt,
+
+				'complex:overlay'	=> [ $1 || $ARG{'overlay'} ],
+			);
+
+			$cur=&insert_branch($last => $node);
+
+			%filt=();
+		} elsif(m|{/?([hvca]?)|i) {
+			my($type)=lc($1);
+			my($node)=&node(
+				'type'		=> 'group',
+				'parent'		=> $cur,
+
+				%filt,
+			);
+
+			if($type eq 'h') {
+				$node->{'merge'}='h';
+				$node->{'timer'}='shortest';
+				$node->{'complex:stack'}=['h'];
+			} elsif($type eq 'v') {
+				$node->{'merge'}='v';
+				$node->{'timer'}='shortest';
+				$node->{'complex:stack'}=['v'];
+			} elsif($type eq 'a') {
+				$node->{'merge'}='a';
+				$node->{'timer'}='first';
+				$node->{'complex:aoverlay'}=[];
+			} else {
+				$node->{'merge'}='c';
+				$node->{'complex:concat'}=[];
+			}
+
+			push(@{$cur->{'tree'}}, $node);
+			$cur=$node;
+
+			%filt=();
+		} elsif(m|}|i) {					 #pop out of group
+			unless($cur->{'type'} eq 'group') {
+				&err(4, "Syntax error closing a group that doesn't exist.");
+			}
+
+			#We treat '{fade,blur}-out' as a special case and allow it at the end:
+			if(%filt && $filt{'simple:audio:fade'}) {
+				push(@{$cur->{'parent'}{'simple:audio:fade'}},
+					@{$filt{'simple:audio:fade'}});
+				push(@{$cur->{'parent'}{'simple:video:fade'}},
+					@{$filt{'simple:video:fade'}});
+				delete($filt{'simple:audio:fade'});
+				delete($filt{'simple:video:fade'});
+			} elsif(%filt && $filt{'complex:blur'}) {
+				$cur->{'parent'}{'complex:blur'}=$filt{'complex:blur'};
+				delete($filt{'complex:blur'});
+			}
+
+			if(%filt) {
+				&err(4, 'Filter tokens are missing a clip:', keys(%filt));
+			}
+
+			#Place the first video file first to help compute length:
+			if($cur->{'merge'} eq 'a') {
+				for(my $i=0; $i<@{$cur->{'tree'}}; $i++) {
+					if($SOURCES{$cur->{'tree'}[$i]{'file'}}{'video'}) {
+						unshift(@{$cur->{'tree'}},
+							splice(@{$cur->{'tree'}}, $i, 1));
+						last;
+					}
+				}
+			}
+
+			$cur=$cur->{'parent'};
+
+		} elsif(m/^([\d:.]+)-([\d:.]+)?\s*$/) {
+			my($start)=FFUtils::time2secs($1);
+			my($end)=defined($2)?FFUtils::time2secs($2):$SOURCES{$src}{'length'};
+			my($node)=&node(
+				'type'		=> 'clip',
+				'parent'		=> $cur,
+				'file'		=> $src,
+				'start'		=> $start,
+				'end'		=> $end,
+				'length'		=> $end-$start,
+
+				%filt,
+			);
+
+			if($SOURCES{$src}{'video'}) {
+				$node->{'video'}=&fmt('[%d:v]', $stream);
+				$node->{'width'}=$SOURCES{$src}{'width'};
+				$node->{'height'}=$SOURCES{$src}{'height'};
+			} else {
+				$node->{'width'}=0;
+				$node->{'height'}=0;
+			}
+
+			if($SOURCES{$src}{'audio'}) {
+				$node->{'audio'}=&fmt('[%d:a]', $stream);
+			}
+
+			if($ARG{'normalize'}) {
+				$node->{'simple:audio:normalize'}=[];
+			}
+
+			if($ARG{'practice'}) {
+				$node->{'simple:video:fps'}=[$ARG{'rate'}];
+				$node->{'simple:video:scale'}=[$ARG{'resolution'}];
+			}
+
+			if($ARG{'audio-only'}) {
+				push(@INPUTS, '-r', $ARG{'rate'});
+			}
+			push(@INPUTS, '-ss', $start, '-to', $end, '-i', $src);
+			push(@WATCH, '--{', "-start=$start", "-end=$end", $src, '--}');
+
+			if($end > $SOURCES{$src}{'length'}) {
+				&err(3, "'$2' is past the end of $src.");
+			}
+			push(@{$cur->{'tree'}}, $node);
+			if($cur->{'type'}=~m/transition|overlay/) { #pop out of binary op
+				$cur=$cur->{'parent'};
+			}
+
+			$stream++;
+
+			%filt=();
+		} else {
+			my($found)=0;
+
+			foreach my $simple (grep(m/^simple:/, @ORDER)) {
+				if(@args=m|^$M{$simple}|i) {
+					push(@{$filt{$simple}}, [@args]);
+					$found=1;
+				}
+			}
+
+			unless($found) {
+				&err(1, "'$_' not understood, or file does not exist.");
+			}
+		}
+	}
+
+	#We treat '{fade,blur}-out' as a special case and allow it at the end:
+	if(%filt && $filt{'simple:audio:fade'}) {
+		push(@{$root->{'simple:audio:fade'}}, @{$filt{'simple:audio:fade'}});
+		push(@{$root->{'simple:video:fade'}}, @{$filt{'simple:video:fade'}});
+		delete($filt{'simple:audio:fade'});
+		delete($filt{'simple:video:fade'});
+	} elsif(%filt && $filt{'complex:blur'}) {
+		$root->{'complex:blur'}=$filt{'complex:blur'};
+		delete($filt{'complex:blur'});
+	}
+	if(%filt) {
+		&err(4, 'Filter tokens are missing a clip:', keys(%filt));
+	}
+
+	return($root);
+}
+
+sub compute_lengths {
+	my($node)=@_;
+	my($time)=$node->{'length'};
+	my(@lengths)=();
+
+	foreach my $child (@{$node->{'tree'}}) {
+		push(@lengths, &compute_lengths($child));
+	}
+
+	if($node->{'timer'} eq 'shortest') {
+		$time+=List::Util::min(@lengths);
+	} elsif($node->{'timer'} eq 'longest') {
+		$time+=List::Util::max(@lengths);
+	} elsif($node->{'timer'} eq 'first') {
+		$time+=$lengths[0];
+	} elsif($node->{'timer'} eq 'last') {
+		$time+=$lengths[-1];
+	} else {
+		$time+=List::Util::sum(@lengths);
+	}
+
+	if(exists($node->{'complex:speed'})) {
+		$time=$time/$node->{'complex:speed'}[0];
+	}
+
+	return($node->{'length'}=$time);
+}
+
+sub generate_filters {
+	my($node)=@_;
+	my(@audio)=();
+	my(@video)=();
+	my(@filters)=();
+	my(@complex)=();
+	my($vout, $aout)=&next_labels($node);
+
+	foreach my $child (@{$node->{'tree'}}) {
+		push(@filters, &generate_filters($child));
+	}
+
+	foreach my $filter (@ORDER) {
+		if($filter=~m|simple:audio| && exists($node->{$filter})) {
+			if(ref($node->{$filter}[0]) eq 'ARRAY') {
+				foreach my $run (@{$node->{$filter}}) {
+					push(@audio, $F{$filter}->($node, @$run));
+				}
+			} else {
+				push(@audio, $F{$filter}->($node, @{$node->{$filter}}));
+			}
+		} elsif($filter=~m|simple:video| && exists($node->{$filter})) {
+			if(ref($node->{$filter}[0]) eq 'ARRAY') {
+				foreach my $run (@{$node->{$filter}}) {
+					push(@video, $F{$filter}->($node, @$run));
+				}
+			} else {
+				push(@video, $F{$filter}->($node, @{$node->{$filter}}));
+			}
+		} elsif(exists($node->{$filter})) {
+			#Complex filters should have their own node, no multi
+			push(@complex, $F{$filter}->($node, @{$node->{$filter}}));
+		}
+	}
+
+	if(@complex) {
+		$node->{'f:x'}=join(';', @complex);
+		push(@filters, $node->{'f:x'});
+	}
+	if(@video) {
+		unless($node->{'video'}) {
+			$node->{'video'}=$node->{'tree'}[0]{'video'};
+		}
+
+		$node->{'f:v'}=$node->{'video'} . join(',', @video) . $vout;
+		push(@filters, $node->{'f:v'});
+		$node->{'video'}=$vout;
+	}
+	if(@audio) {
+		unless($node->{'audio'}) {
+			$node->{'audio'}=$node->{'tree'}[0]{'audio'};
+		}
+
+		$node->{'f:a'}=$node->{'audio'} . join(',', @audio) . $aout;
+		push(@filters, $node->{'f:a'});
+		$node->{'audio'}=$aout;
+	}
+
+	return(@filters);
+}
+
+sub map_outputs {
+	my($root)=@_;
+	my(@program)=();
+	my(@filters)=&generate_filters($root);
+
+	if(@filters) {
+		push(@program, '-filter_complex', join(';', @filters));
+	}
+
+	if($root->{'video'}=~s/\[(\d+):v\]/$1:v/) {
+		push(@program, '-c:v', 'copy');
+	}
+	if($root->{'audio'}=~s/\[(\d+):a\]/$1:a/) {
+		push(@program, '-c:a', 'copy');
+	}
+
+	push(@program, '-map', $root->{'video'});
+	if($ARG{'audio-only'}) {
+		($JFH, $JUNK)=File::Temp::tempfile(SUFFIX => '.mp4');
+		push(@program, $JUNK);
+	}
+	push(@program, '-map', $root->{'audio'});
+
+	return(@program);
+}
+
+sub tag {
+	return('-metadata', &fmt('%s=%s', @_));
+}
+
+=head2 Execution
+
+If you are running in the C<-dry-run> mode, then all B<clips> will do is
+print out what it would have done, and exit.  Similarly, if you requested
+help with C<-h> or C<-help> or any of the other informational command-line
+options, then the correct information will be displayed before exiting
+without processing any video files.
+
+=cut
+
+if($ARG{'version'}) {
+	print "$0 $VERSION\n";
+	exit(0);
+} elsif($ARG{'help'} || $ARG{'print'}=~m/usage/i) {
+	pod2usage(-verbose => 1, -exitval => 0);
+} elsif($ARG{'examples'} || $ARG{'print'}=~m/example/i) {
+	pod2usage(-verbose => 99, -sections => 'EXAMPLES', -exitval => 0);
+} elsif($ARG{'manual'} || $ARG{'print'}=~m/help/i) {
+	pod2usage(-verbose => 2, -exitval => 0);
+} elsif($ARG{'dry-run'}) {
+	print "<DRY-RUN>\n";
+}
+unless(-r $ARGV[0]) {
+	&err(2, 'Input file does not exist:', $ARGV[0]);
+}
+
+=pod
+
+Otherwise, B<clips> will carefully construct an L<ffmpeg(1)> program after
+parsing the tokens provided on the command-line.  Filters, resolutions,
+frame rates, tags, etc. will all be combined as described above to prepare
+this program for execution.
+
+=cut
+
+$ROOT=&parse(@ARGV);
+&compute_lengths($ROOT);
+
+push(@FFPROGRAM, &map_outputs($ROOT));
+push(@FFPROGRAM, '-s', $ARG{'resolution'})			if($ARG{'resolution'});
+push(@FFPROGRAM, '-r', $ARG{'rate'})				if($ARG{'rate'});
+push(@FFPROGRAM, '-to', $ARG{'end'})				if($ARG{'end'});
+push(@FFPROGRAM, &tag('title', $ARG{'title'}))		if($ARG{'title'});
+push(@FFPROGRAM, &tag('comment', $ARG{'comment'}))	if($ARG{'comment'});
+push(@FFPROGRAM, &tag('description', $ARG{'description'}))	if($ARG{'description'});
+
+if($ARG{'ffmpeg'}) {
+	foreach my $passthrough (@{$ARG{'ffmpeg'}}) {
+		push(@FFPROGRAM, split(m/\s+/, $passthrough));
+	}
+}
+
+=pod
+
+If informational settings are applied
+(e.g. debugging level 3 or C<-print=tree> then a full dump of the data
+structure created from parsing the command-line will be displayed before
+execution.
+
+=cut
+
+if($ARG{'debug'}>2 || $ARG{'print'}=~m/tree/i) {
+	&treedump;
+}
+
+=pod
+
+Once the L<ffmpeg(1)> command-line is fully assembled and ready for execution,
+it is executed.  Pro tip, use the C<-d> or C<-debug> command-line options
+to have that command displayed to the screen.  It is useful for education,
+debugging your video, and tweaking the command-line when something goes wrong.
+
+Please note that B<clips> will always automatically overwrite exist files.
+It does, however, display a message of this intention and waits 3 seconds
+before starting.  If you think you made a mistake, C<CTRL-C> is your friend
+here!
+
+Creating a video file can take a long time, and so a status line showing
+progress and estimated time to completion will show on the terminal.  Please
+note that early estimations of time are a litle bit inaccurate, but you will
+see the time become more realistic as you process more of the file.
+
+If the first parameter (the output file) is specified as C<-> then
+L<mpv(1)> will be started to show the source clips used to create
+the video.  Note that none of the filters are applied, and so this
+is only partially useful.
+
+=cut
+
+if($DST=~m/^(mpv|preview|watch|-)$/i) {
+	if($ARG{'dry-run'}) {
+		print join(' ', @MPV, @WATCH), "\n";
+	} else {
+		system(@MPV, @WATCH);
+		print "\n";
+	}
+} else {
+	if($ARG{'dry-run'} || $ARG{'debug'}) {
+		print "\n", FFUtils::cmdline(@INPUTS, @FFPROGRAM, $DST), "\n\n";
+	} elsif($ARG{'print'}=~m/command/i) {
+		print FFUtils::cmdline(@INPUTS, @FFPROGRAM, $DST), "\n";
+		exit(0);
+	}
+
+	if($ARG{'dry-run'}) {
+		print "\nN.B. '$DST' exists and will be overwritten\n" if(-r $DST);
+	} else {
+		FFUtils::status(
+			FFUtils::ffmpeg(@INPUTS, @FFPROGRAM, $DST),
+			$ROOT->{'length'}
+		);
+	}
+
+	if($?) {
+		print STDERR "ffmpeg exited with errors.\n";
+	} else {
+		printf("\nOutput file:\n'%s' (%s)\n", $DST,
+			FFUtils::secs2time($ROOT->{'length'}));
+	}
+}
+
+if($ARG{'dry-run'}) {
+	print "</DRY-RUN>\n";
+}
+
+=head1 NOTES
+
+There is an audio only C<-A> or C<-audio-only> option to running B<clips>
+even with video files.  It's worth noting that, to ensure all filters work
+properly (including complex ones) that B<clips> actually produces an
+entirely pathetic video file at less than one frame per second.  Then,
+promptly deletes that file before exiting.  This ensures that everything
+works, but is fast because of the absurdly, otherwise unusable, tiny
+frame rate.
+
+=cut
+
+if($ARG{'audio-only'}) {
+	close($JFH);
+	unlink($JUNK);
+}
+
+=pod
+
+Use C<mpv --osd-fractions> (or an equivalent) to show exact frame time
+specifications for finding the best offsets.  B<clips> can use fractional
+time formats to ensure the exact frame cut can be specified on the command
+line.  Any time format mentioned under B<Time duration> in L<ffmpeg-utils(1)>
+is supported.
+
+=head1 EXAMPLES
+
+=over 8
+
+=item clips new.mp4 src1.mp4 0:00.0-3:20.2 4:01.0-5:50.3 src2.mp4 0:00-
+
+Create F<new.mp4> from 2 clips of src1.mp4 followed by the entirety of src2.mp4
+
+=item clips output.mp4 video.mp4 fadein/2 0:20.369-1:46.900 fadeout
+
+Make F<output.mp4> from a 1 minute and 26 second clip of F<video.mp4> with
+the a fadein of 2 seconds and the default fadeout of 3 seconds.
+
+=item clips out.mp4 in.mp4 0:00-39.060 / 1:22.800-2:03.240
+
+Create f<out.mp4> from 2 sections of F<in.mp4> with the default transition
+type of C<fade> and default time of 0.8 seconds.
+
+=item clips new.mp4 vid1.mp4 0- /1.4/U vid2.mp4 0-
+
+Create F<new.mp4> from all of F<vid1.mp4> and F<vid2.mp4> with a swipe up
+style transition of 1.4 seconds.
+
+=item clips new.mp4 source.mp4 0:13-0:44 /2 1:14-2:33 /2 4:11-5:01
+
+Create a file F<new.mp4> with 3 clips from F<source.mp4> all using a
+2 second fade transition.
+
+=item clips -g 1920:1080 new.mp4 intro.mp4 0- { left.mp4 0:19.600- right.mp4 0- } outro.mp4 0-0:34.369 /0.5 0:38.900-
+
+Create F<new.mp4> by using an intro file, then having a segment consisting
+of the two files F<left.mp4> and F<right.mp4> stacked horizontally.  Finish
+off with two clips from the file F<outro.mp4>.
+
+=item clips new.mp4 base.mp4 0-0:30 %70/lime:0.02:0.03 top.mp4 0-0:30
+
+This will create a 30 second clip of top.mp4 layed over base.mp4 in a way
+that it is completely transparent for lime and very nearly lime colors,
+and slightly transparent for the rest of he colors.
+
+=item clips new.mp4 file.mp4 ffmpeg/v/unsharp=7:7:-2:7:7:-2 0:10-3:45
+
+Write F<new.mp4> from the 10 seconds until 3 minutes, 45 seconds
+portion of F<file.mp4>.  Use the L<ffmpeg-filters(1)> filter C<unsharp>
+as a simple video filtergraph.  C<unsharp> is not defined inside of
+C<clips>, but this filter will be passed through to L<ffmpeg(1)> exactly
+as defined here.
+
+=item clips wide.mp4 phone.mp4 fade-in {/h
+        crop/420:1080:1:-200 flip ffmpeg/v/gblur=40 0:12.727-2:04.265
+	   crop/1080:1080:0:-200 0:12.727-2:04.265
+	   crop/420:1080:-1:-200 flip ffmpeg/v/gblur=40 0:12.727-2:04.265
+	 } fade-out
+
+Take a 1080x1920 vertical phone image, crop out the 1080x1080 section to
+keep, and suround it by blurred mirrors of the video content.  For extra
+fun, we could have added an C<ffmpeg/v/eq=brightness=-0.4> to darken the
+blurred sides.
+
+=item clips carousel.mp4 src1.mp4 0-10 /10/L src2.mp4 0-10 /10/L
+      src3.mp4 0-10 /10/L src4.mp4 0-10 /10/L src1.mp4 10-20 /10/L
+	 src2.mp4 10-20 /10/L src3.mp4 0-20 /10/L src4.mp4 10-15 
+
+Create a continuously scrolling video of 10 second clips from 4 different
+input files moving from right to left.  After the last video scrolls to
+cover the entire window, the video ends.
+
+=back
+
+=head1 BUGS
+
+Input files have to be compatible.  B<clips> doesn't do very much at all,
+when multiple input files are used, to make sure files are compatible.  You
+can use the C<-resolution> command-line option to force videos into line,
+but be careful to review the results.
+
+This is more of an L<ffmpeg(1)> bug, but if find transitions that stutter,
+shutter, or hang, then it might be the frame rate.  Before trying anything
+else, use he C<-R> or C<-rate> command-line options to specify a standard
+frame rate like 30 or 60 before making other changes.
+
+To make the interface clean, L<ffmpeg(1)> is run with the C<-loglevel fatal>
+and it doesn't provide the best error statements.  Frankly, there are no
+good ffmpeg error statements for end-users.  But, these are particularly
+uninformative.  So, be aware of that when failures occur.  The best choice
+is to run win C<-n> or C<-dry-run> mode and copy/paste the commandline you
+get there.
+
+=head1 EXIT CODES
+
+=over
+
+=item Z<>0
+
+B<clips> ran and exited normally.
+
+=item Z<>1
+
+A command-line token was not understood
+
+=item Z<>2
+
+The first argument after the destination file must be the first input
+file, but it was not.
+
+=item Z<>3
+
+A clip was specified that ends after the end of the input file it is to
+be pulled from.
+
+=item Z<>4
+
+There was a token syntax error.  Tokens were uses which require another
+argument to be present which was not.
+
+=item Z<>5
+
+In establishing a group, an unknown option was presented to merge
+group items.
+
+=item Z<>6
+
+An crop definition expands outside the boundary of the input.
+
+=item Z<>7
+
+An attempt was made to overlay without an input to do so with.  This is
+a command-line token error which most likely occured from a missing
+clip specification sequence.
+
+=item Z<>8
+
+An error was made in specifying overlay parameters.
+
+=item Z<>9
+
+An stacking undefined stacking parameter was sent to complex:stack
+
+=back
+
+=head1 SEE ALSO
+
+L<ffmpeg(1)>, L<ffmpeg-filters(1)>, L<mpv(1)>
+
+=head1 AUTHOR
+
+William Totten
+
+=head1 LICENSE
+
+BSD 3-Clause License
+
+=head1 COPYRIGHT
+
+  Copyright (c) 2026, William Totten
+  All rights reserved.
+  
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions
+  are met:
+  
+  * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+  
+  * Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+  
+  * Neither the name of the copyright holder nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+  
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+  PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+  HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+=cut
+

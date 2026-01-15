@@ -1,0 +1,18 @@
+#!/usr/bin/perl
+
+use lib "$ENV{'HOME'}/bin";
+
+use FFUtils;
+
+my($LENGTH)=0;
+my($TOTAL)=0;
+
+foreach my $file (@ARGV) {
+	$LENGTH=FFUtils::probe($file, 'duration');
+	$TOTAL+=$LENGTH;
+
+	printf("%-70s  %s\n", $file, FFUtils::secs2time($LENGTH));
+}
+
+print "\nTOTAL: ", FFUtils::secs2time($TOTAL), "\n";
+
