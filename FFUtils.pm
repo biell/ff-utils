@@ -2,7 +2,7 @@
 
 package FFUtils;
 
-our($VERSION)='$Id';
+our($VERSION)='1.0';
 
 use IO::Handle;
 use List::Util;
