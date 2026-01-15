@@ -31,9 +31,76 @@ The idea behind *clips* is to easily produce videos for upload to sites
 like youtube or vimeo that rival the quality of most content with minimal
 effort.
 
+### Syntax
+
+The command line for *clips* starts with options to affect the runtime
+(see `clips -h` for a list) and then the output file name.  After that,
+there are a series of tokens which affect the resulting video file.
+Those tokens may be input file names, segements of video/audio (aka clips)
+and a series of instructions which result in the generation of a
+`ffmpeg -filter_complex` argument.  While the command-line can get long,
+it should be vastly simpler than the corresponding `ffmpeg` command.
+
+Take, as an example 4 people who participated in an Enduro race, each with
+a helmet cam.  They all started recording at different times before the
+start, so first we use a program (e.g. `mpv -osd-fractions`) to identify
+the exact time they each cros the start line, then we start the videos
+exactly 5 seconds before that time.  We have 3 of the videos in standard
+HD (1080p) and one in 2K video (1440p).  So, we scale the 2K video down
+to standard high definition, and stack them two across on top with two
+across on bottom, without chaning the resolutions further, we end up with
+a 4K video.  Some of the recordings have different volumes, so we adjust
+those, and add a little extra to the winning rider, so they stand out.
+At 5 seconds in, we place the text "START" in red in the middle:center
+(default location) of the screen where all the 4 videos intersect.  Then,
+we print at the middle:top of each video the word "FINISH" in the default
+black text a the moment they cross the finish line and keep it dislayed
+for about 3 seconds.  Stitching this all together allows us to watch all
+4 videos and compare how each rider is doing vís-a-ví each other.  The
+resulting video is about 8 minutes, 30 seconds long.
+
+        $ clips race.mp4 text/0:05-0:08/red/START                            \
+          {/v                                                                \
+            {/h jeff.mp4 text/8:03.349-8:06/middle:top/FINISH 0:14.367-8:44  \
+                bodhi.mp4 text/7:58.903-8:02/middle:top/FINISH               \
+                scale/1920:1080 v/0.7 1:03.130-9:33 }                        \
+            {/h austen.mp4 text/7:46.201-7:50/middle:top/FINISH v/1.5        \
+                0:37.284-9:07 nico.mp4 text/7:49.489-7:53/middle:top/FINISH  \
+                v/0.5 0:21.697-8:51 }                                        \
+          }
+
+It produces the following `ffmpeg` command:
+
+        ffmpeg -y -ac 2 -stats_period 6 -ss 14.367 -to 524 -i jeff.mp4
+         -ss 63.13 -to 573 -i bodhi.mp4 -ss 37.284 -to 547 -i austen.mp4
+         -ss 21.697 -to 531 -i nico.mp4 -filter_complex
+         "[0:v]drawtext=x='(w-text_w)/2':y='h*0.01':fontcolor='black@0.9':enable='between(t,483.349,486)':fontsize='h/8':text='FINISH'[v3.1];
+          [1:v]drawtext=fontcolor='black@0.9':enable='between(t,478.903,482)':y='h*0.01':x='(w-text_w)/2':fontsize='h/8':text='FINISH',scale=0:1080:force_original_aspect_ratio=decrease[v4.1];
+          [1:a]volume=0.7[a4.1];[v3.1][v4.1]hstack=inputs=2:shortest=1[v2.2];[0:a][a4.1]amix=inputs=2:duration=shortest[a2.2];
+          [2:v]drawtext=fontcolor='black@0.9':enable='between(t,466.201,470)':x='(w-text_w)/2':y='h*0.01':fontsize='h/8':text='FINISH'[v6.1];
+          [2:a]volume=1.5[a6.1];[3:v]drawtext=fontsize='h/8':fontcolor='black@0.9':enable='between(t,469.489,473)':x='(w-text_w)/2':y='h*0.01':text='FINISH'[v7.1];
+          [3:a]volume=0.5[a7.1];[v6.1][v7.1]hstack=inputs=2:shortest=1[v5.2];[a6.1][a7.1]amix=inputs=2:duration=shortest[a5.2];
+          [v2.2][v5.2]vstack=inputs=2:shortest=1[v1.2];[a2.2][a5.2]amix=inputs=2:duration=shortest[a1.2];
+          [v1.2]drawtext=x='(w-text_w)/2':y='(h-text_h)/2':fontcolor='red':enable='between(t,5,8)':fontsize='h/8':text='START'[v1.1]
+         " -map "[v1.1]" -map "[a1.2]" race.mp4
+
+And, the screen output looks like:
+
+        Preprocessing (0:10.0)
+
+                  Encoded/Target    Pct     Size    Elapsed/Expected
+        Complete:  8:29.3/8:29.3 ,  99%, 1029 MB,   9.2 min/9.2   min  
+
+        Output file:
+        'race.mp4' (8:29.3)
+
+Hopefully, this example illustrates how **clips** can simplify video
+creation on the command-line without expensive video editing software.
+And, your high-end software might be using `ffmpeg` under the covers
+anyway.
+
 Examples
 --------
-
 
 * Create `new.mp4` from 2 clips of `src1.mp4` followed by the entirety of
   `src2.mp4`

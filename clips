@@ -1536,6 +1536,10 @@ sub parse {
 				%filt,
 			);
 
+			unless($src) {
+				&err(2, 'An input file must be specified.');
+			}
+
 			if($SOURCES{$src}{'video'}) {
 				$node->{'video'}=&fmt('[%d:v]', $stream);
 				$node->{'width'}=$SOURCES{$src}{'width'};
@@ -1749,9 +1753,6 @@ if($ARG{'version'}) {
 } elsif($ARG{'dry-run'}) {
 	print "<DRY-RUN>\n";
 }
-unless(-r $ARGV[0]) {
-	&err(2, 'Input file does not exist:', $ARGV[0]);
-}
 
 =pod
 
@@ -1788,8 +1789,11 @@ execution.
 
 =cut
 
-if($ARG{'debug'}>2 || $ARG{'print'}=~m/tree/i) {
+if($ARG{'debug'}>2) {
 	&treedump;
+} elsif($ARG{'print'}=~m/tree/i) {
+	&treedump;
+	exit(0);
 }
 
 =pod
