@@ -836,7 +836,7 @@ $F{'complex:blur'}=sub {
 
 	if($type=~m/in/i) {
 		push(@blur, &fmt('#{I}afade=t=#{T}:st=#{S}:d=#{L}:curve=#{C}#{O}', {
-				'I'	=> $node->{'audio'},
+				'I'	=> $node->{'tree'}[0]{'audio'},
 				'T'	=> 'in',
 				'S'	=> 0,
 				'L'	=> $length,
@@ -845,14 +845,14 @@ $F{'complex:blur'}=sub {
 			}));
 
 		push(@blur, &fmt('#{I}gblur=sigma=#{R}:#{E}#{O}', {
-				'I' => $node->{'video'},
+				'I' => $node->{'tree'}[0]{'video'},
 				'R' => 40,
 				'E' => "enable=lte(t\\,$length)",
 				'O' => $vb,
 			}));
 
 		push(@blur, &fmt('#{I1}#{I2}blend=#{T}:#{E},eq=#{B}:#{C}:#{E}#{O}', {
-				'I1' => $node->{'video'},
+				'I1' => $node->{'tree'}[0]{'video'},
 				'I2' => $vb,
 				'S'	=> 0,
 				'L'	=> $length,
@@ -867,7 +867,7 @@ $F{'complex:blur'}=sub {
 		$start=$node->{'length'}-$length;
 
 		push(@blur, &fmt('#{I}afade=t=#{T}:st=#{S}:d=#{L}:curve=#{C}#{O}', {
-				'I'	=> $node->{'audio'},
+				'I'	=> $node->{'tree'}[0]{'audio'},
 				'T'	=> 'out',
 				'S'	=> $node->{'length'}-$length,
 				'L'	=> $length,
@@ -876,7 +876,7 @@ $F{'complex:blur'}=sub {
 			}));
 
 		push(@blur, &fmt('#{I}gblur=sigma=#{R}:#E#{O}', {
-				'I'	=> $node->{'video'},
+				'I'	=> $node->{'tree'}[0]{'video'},
 				'R'	=> 40,
 				'E'	=> "enable=gte(t\\,$start)",
 				'O'	=> $vb,
@@ -884,7 +884,7 @@ $F{'complex:blur'}=sub {
 
 		push(@blur, &fmt('#{I1}#{I2}blend=#{T}:#{E},eq=#{B}:#{C}:#{E}#{O}', {
 				'I1' => $vb,
-				'I2' => $node->{'video'},
+				'I2' => $node->{'tree'}[0]{'video'},
 				'S'	=> $node->{'length'}-$length,
 				'L'	=> $length,
 				'R'	=> "((T-#{S})/#{L})",
@@ -941,8 +941,8 @@ $M{'complex:speed'}='speed/?([\d.]*)';
 $F{'complex:speed'}=sub {
 	my($node, $speed)=@_;
 	my($diff)=($node->{'length'}/$speed) - $node->{'length'};
-	my($vin)=$node->{'video'} || $node->{'parent'}[0]{'video'};
-	my($ain)=$node->{'audio'} || $node->{'parent'}[0]{'audio'};
+	my($vin)=$node->{'tree'}[0]{'video'};
+	my($ain)=$node->{'tree'}[0]{'audio'};
 	my($vout, $aout)=&next_labels($node);
 	my(@speed)=();
 
@@ -953,14 +953,21 @@ $F{'complex:speed'}=sub {
 			'S'	=> 1/$speed,
 			'O'	=> $vout
 		}));
-	push(@speed, &fmt('#{I}atempo=#{S}#{O}', {
-			'I'	=> $ain,
-			'S'	=> $speed,
-			'O'	=> $aout
-		}));
-
 	$node->{'video'}=$vout;
-	$node->{'audio'}=$aout;
+
+	if($speed<0.5) {
+		print "Note, audio is disabled below 0.5\n";
+		#&err(10, 'Cannot specify a speed slower than 0.5');
+		$node->{'audio'}=undef;
+	} else {
+		push(@speed, &fmt('#{I}atempo=#{S}#{O}', {
+				'I'	=> $ain,
+				'S'	=> $speed,
+				'O'	=> $aout
+			}));
+		$node->{'audio'}=$aout;
+	}
+
 
 	return(@speed);
 };
@@ -980,13 +987,27 @@ $M{'simple:audio:volume'}='v[olume]*/?([\d.]*)';
 $F{'simple:audio:volume'}=sub {
 	my($node, $volume)=@_;
 
-	$volume||=$ARG{'volume'};
+	if($volume eq '') {
+		$volume=$ARG{'volume'};
+	}
 
 	if($volume!=1) {
 		return(&fmt('volume=%f', $volume));
 	} else {
 		return();
 	}
+};
+
+=item mute
+
+This is just an alias for C<volume/0>.  It isn't even a shortcut, as
+C<v/0> is shorter.  But, it does read nicely and is intuitive.
+
+=cut
+
+$M{'simple:audio:mute'}='mute';
+$F{'simple:audio:mute'}=sub {
+	$F{'simple:audio:volume'}->(@_, 0);
 };
 
 =item normalize/[#]
@@ -1124,7 +1145,7 @@ $F{'complex:overlay'}=sub {
 			$color="0x$1$2";
 		} elsif($option=~m/^[a-z](:[:\d.]+)?$/i) {
 			$color=$option;
-		} elsif($option=~m/^([\w+-]+)[:x]([\w+-]+)$/i) {
+		} elsif($option=~m/^([+-]?\w+)[:x]([+-]?\w+)$/i) {
 			$position=&fmt('x=%d:y=%d', split(m/[x:]/i, $option));
 		}
 	}
@@ -1334,6 +1355,7 @@ my(@ORDER)=qw(
 	simple:audio:denoise
 	simple:audio:normalize
 	simple:audio:volume
+	simple:audio:mute
 	simple:audio:delay
 	simple:audio:fade
 	simple:audio:ffmpeg
@@ -1396,6 +1418,8 @@ sub next_labels {
 	);
 }
 
+#Note: 'complex' filters should be given their own node in the tree.
+
 sub parse {
 	my($root)=&node(
 		'type'			=> 'root',
@@ -1419,15 +1443,31 @@ sub parse {
 				'audio'	=> FFUtils::has_audio($src),
 			};
 		} elsif(@args=m|^$M{'complex:speed'}|i) {
-			$filt{'complex:speed'}=[@args];
+			my($node)=&node(
+				'type'		=> 'complex',
+				'parent'		=> $cur,
+				'complex:speed'=> [@args],
+			);
+
+			push(@{$cur->{'tree'}}, $node);
+			$cur=$node;
+			#Filters aren't applied here, forcing them down to the child
 		} elsif(@args=m|^$M{'complex:blur'}|i) {
-			$filt{'complex:blur'}=[@args];
+			my($node)=&node(
+				'type'		=> 'complex',
+				'parent'		=> $cur,
+				'complex:blur'	=> [@args],
+			);
+
+			push(@{$cur->{'tree'}}, $node);
+			$cur=$node;
+
+			#Filters aren't applied here, forcing them down to the child
 		} elsif(m|^/([\d.]*)/?([a-zA-Z]*)|) {	#Binary operator
 			my($last)=pop(@{$cur->{'tree'}}) ||
 				&err(7, 'Cannot transition from nothing.');
 			my($node)=&node(
-				'type'		=> 'transition',
-				'tree'		=> [],
+				'type'		=> 'complex',
 				'length'		=> -($1 || $ARG{'transition'}),
 
 				%filt,
@@ -1445,7 +1485,7 @@ sub parse {
 			my($last)=pop(@{$cur->{'tree'}}) ||
 				&err(7, 'Cannot overlay nothing.');
 			my($node)=&node(
-				'type'		=> 'overlay',
+				'type'		=> 'complex',
 				'tree'		=> [],
 				'timer'		=> 'first',
 
@@ -1512,6 +1552,11 @@ sub parse {
 			#Place the first video file first to help compute length:
 			if($cur->{'merge'} eq 'a') {
 				for(my $i=0; $i<@{$cur->{'tree'}}; $i++) {
+					if($cur->{'tree'}[$i]{'type'} eq 'complex') {
+						unshift(@{$cur->{'tree'}},
+							splice(@{$cur->{'tree'}}, $i, 1));
+						last;
+					}
 					if($SOURCES{$cur->{'tree'}[$i]{'file'}}{'video'}) {
 						unshift(@{$cur->{'tree'}},
 							splice(@{$cur->{'tree'}}, $i, 1));
@@ -1572,7 +1617,7 @@ sub parse {
 				&err(3, "'$2' is past the end of $src.");
 			}
 			push(@{$cur->{'tree'}}, $node);
-			if($cur->{'type'}=~m/transition|overlay/) { #pop out of binary op
+			if($cur->{'type'} eq 'complex') { #pop out
 				$cur=$cur->{'parent'};
 			}
 
@@ -2018,6 +2063,10 @@ An error was made in specifying overlay parameters.
 =item Z<>9
 
 An stacking undefined stacking parameter was sent to complex:stack
+
+=item Z<>10
+
+A speed change parameter was entered out of the allowed range.
 
 =back
 
