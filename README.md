@@ -19,21 +19,21 @@ ETA calculation.
 clips
 -----
 
-*clips* has a slightly intuitive command-line interface which is much
+**clips** has a slightly intuitive command-line interface which is much
 simpler to understand and use than the `ffmpeg` interface.  While being
 easier to use, this comes with the price of limited functionality and
-limited configuration/predefined defaults.  For times when *clips* can
+limited configuration/predefined defaults.  For times when **clips** can
 get you almost all the way to a perfect script, it can be used to provide
 the `ffmpeg` command to run instead of actually running it.  This can
 then be modified to produce the exact desired result.
 
-The idea behind *clips* is to easily produce videos for upload to sites
+The idea behind **clips** is to easily produce videos for upload to sites
 like youtube or vimeo that rival the quality of most content with minimal
 effort.
 
 ### Syntax
 
-The command line for *clips* starts with options to affect the runtime
+The command line for **clips** starts with options to affect the runtime
 (see `clips -h` for a list) and then the output file name.  After that,
 there are a series of tokens which affect the resulting video file.
 Those tokens may be input file names, segements of video/audio (aka clips)
@@ -44,11 +44,11 @@ it should be vastly simpler than the corresponding `ffmpeg` command.
 Take, as an example 4 people who participated in an Enduro race, each with
 a helmet cam.  They all started recording at different times before the
 start, so first we use a program (e.g. `mpv -osd-fractions`) to identify
-the exact time they each cros the start line, then we start the videos
+the exact time they each crosses the start line, then we start the videos
 exactly 5 seconds before that time.  We have 3 of the videos in standard
 HD (1080p) and one in 2K video (1440p).  So, we scale the 2K video down
 to standard high definition, and stack them two across on top with two
-across on bottom, without chaning the resolutions further, we end up with
+across on bottom; without chaning the resolutions further, we end up with
 a 4K video.  Some of the recordings have different volumes, so we adjust
 those, and add a little extra to the winning rider, so they stand out.
 At 5 seconds in, we place the text "START" in red in the middle:center
@@ -133,7 +133,7 @@ Examples
 
         clips -g 1920:1080 new.mp4 intro.mp4 0-  \
           { left.mp4 0:19.600- right.mp4 0- }    \
-	     outro.mp4 0-0:34.369 /0.5 0:38.900-
+          outro.mp4 0-0:34.369 /0.5 0:38.900-
 
 * This will create a 30 second clip of top.mp4 layed over base.mp4 in a way
   that it is completely transparent for lime and very nearly lime colors,
