@@ -1,0 +1,29 @@
+###################################################################
+#
+# clips user filter file
+#
+# This file contains personalized transitions and filters for
+# use with the `clips` video editor.
+#
+###################################################################
+                   
+user:transition:r    radial
+
+user:audio:mute      mute                volume=0
+user:audio:cave      cave/D=1000         aecho=0.5:0.4:#{D}:0.5
+
+user:audio:speech    speech/N            afftdn=nf=#{N},dialoguenhance,\
+                                         volume=2
+user:audio:roadnoise roadnoise/V=2/N=-25 afftdn=nf=#{N},highpass,lowpass,\
+                                         afwtdn,dialoguenhance,volume=#{N}
+
+user:video:bblur     bblur/X=5/Y=5       avgblur=sizeX=#{X}:sizeY=#{Y}
+
+# Turn a 4K video into a stabilized 2K video
+user:video:ds4to2k_1 ds4to2k_1           deshake=rx=32:ry=32,\
+                                         crop=3200:1800:320:180,\
+								 scale=2560:1440
+
+user:video:ds4to2k_2 ds4to2k_2           deshake=rx=64:ry=64,\
+                                         crop=3200:1800:320:180,\
+								 scale=2560:1440
