@@ -11,6 +11,7 @@ clips - Make a video file out of clips from other videos
 
 my($VERSION)='0.9';
 
+use POSIX;
 use List::Util;
 use Getopt::Long;
 use Data::Dumper;
@@ -105,6 +106,11 @@ End the video after C<#> time.  Time can be specified in any supported
 format.  This option is useful for testing just an initial portion of
 the video or to cut it off at a maximum time limit.
 
+=item -U <userfile> or -user=<userfile>
+
+Supply a userfile of your own tokens to extend B<clips> capabilities or
+act as aliases/shortcuts for L<ffmpeg(1)> functions.
+
 =item -O <options> or -ffmpeg=<options>
 
 Pass through C<options> as arguments to the L<ffmpeg(1)> command.  Mostly,
@@ -143,8 +149,9 @@ Display information about what would be done, then exit.
 =item -d or -debug
 
 Display more information to the screen about processing.  Most notably,
-print the L<ffmpeg(1)> command to the screen before execution.  Often
-times, the C<-dry-run> option is a better choice, but you do you.
+print the L<ffmpeg(1)> command to the screen before execution.  This
+argument can be supplied sucessive times to increase the information
+displayed regarding B<clips> execution.
 
 =item -V or -version
 
@@ -185,7 +192,8 @@ my(@OPTIONS)=qw(
 	practice|P
 	end|E=s
 	ffmpeg|options|O=s@
-	print=s
+	userfile|aliases|alias|U=s
+	print=s@
 	dry-run|dryrun|n
 	debug|verbose|d+
 	version|V
@@ -200,6 +208,7 @@ my(%ARG)=(
 	'fade'			=> 3,
 	'speed'			=> 1,
 	'volume'			=> 1,
+	'userfile'		=> $ENV{'CLIPS_USERFILE'},
 );
 
 Getopt::Long::Configure('pass_through', 'bundling_override', 'ignore_case');
@@ -211,11 +220,18 @@ if($ARGV[0]=~m/^-\w/) {
 	&err(2, 'Unrecognized command-line parameter:', $ARGV[0]);
 }
 
-if($ARG{'print'}=~m/defaults/i) {
+$ARG{'print'}=join(',', @{$ARG{'print'}});
+
+if($ARG{'print'}=~m/defaults/i || $ARG{'debug'}>4) {
+	print "Defaults:\n";
 	foreach my $key (sort(keys(%ARG))) {
 		printf("%16s = %s\n", $key, $ARG{$key});
 	}
-	exit(0);
+	if($ARG{'print'}=~m/defaults/i) {
+		exit(0);
+	} else {
+		print "\n";
+	}
 }
 
 my(@MPV)=qw(mpv --osd-fractions --msg-level=cplayer=no,statusline=status);
@@ -249,6 +265,8 @@ if($ARG{'audio-only'}) {
 
 my(%M)=();	#Filter Match
 my(%F)=();	#Filter Functions
+my(%UM)=();	#UserFilter Match
+my(%UF)=();	#UserFilter Macro Definition
 
 sub debugtreesort {
 	my($hash)=@_;
@@ -270,6 +288,7 @@ sub debugtreesort {
 		f:v       51
 		f:x       52
 		parent    60
+		tree      zz
 	);
 
 	return([sort(
@@ -294,8 +313,8 @@ sub treedump {
 	$tree=~s/VAR1/ROOT/g;
 	$tree=~s/=> \!\!0,/=> 0,/g;
 	$tree=~s/=> \!\!1,/=> 1,/g;
-	$tree=~s/(\n\s+)(\[.+?\s+\])/$1.&debugcollapse($2)/ges;
-	$tree=~s/(=> \[\n\s+.{1,30}\n\s+\])/&debugcollapse($1)/ges;
+	$tree=~s/(\n\s+)(\[.*?\s*\])/$1.&debugcollapse($2)/ges;
+	$tree=~s/(=> \[\n\s+[^}]{1,30}\n\s+\])/&debugcollapse($1)/ges;
 
 	print $tree, "\n";
 }
@@ -305,7 +324,7 @@ sub treedump {
 sub err {
 	my($code)=shift;
 
-	&treedump if($ARG{'debug'}>2);
+	&treedump if($ARG{'debug'}>1);
 
 	print STDERR join(' ', @_), "\n";
 	exit($code);
@@ -522,12 +541,7 @@ a large, black text in the center of the screen for the duration of
 the video.  Arguments can be supplied in any order, and B<clips>
 will look at the argument to decide which type it is.  Arguments
 left off will use defaults.  B<clips> attempts to recognize arguments
-in the following order.
-
-Note that many of these arguments may be mathmatical formulas.  AND, a
-slash symbol (/) is our seperator.  When dividing, either escape the
-symbol (e.g. C<\/>) or instead use the functional notation
-C<div(h-text_h,2)>
+in the following order, but they do not have to be used that way.
 
 =over 8
 
@@ -580,7 +594,7 @@ position on the original segment size, ranther the the size as a result
 of the C<scale> token.  While this may not seem ideal in all situations,
 it is helpful for using the original size to plan and for debugging or
 "practice" mode.  If you need this to work otherise, just group it like
-C<text/-256:64 { scale/1920:1080 1:00-2:00 }>.
+C<'text/-256:64/some text' { scale/1920:1080 1:00-2:00 }>.
 
 =item string
 
@@ -589,6 +603,11 @@ special characters except for slash (/) character used to seperate
 arguments.
 
 =back
+
+Note that many of these arguments may be mathmatical formulas.  AND, a
+slash symbol (/) is our seperator.  When dividing, either escape the
+symbol (e.g. C<\/>) or instead use the functional notation
+C<div(h-text_h,2)>
 
 =cut
 
@@ -625,7 +644,7 @@ $F{'simple:video:text'}=sub {
 		} elsif(m/^([\d.:]+)-([\d.:]+)?$/) {
 			$params{'enable'}=&fmt('between(t,%f,%f)',
 				FFUtils::time2secs($1),
-				FFUtils::time2secs($2 || $node->{'length'}));
+				FFUtils::time2secs($2 // $node->{'length'}));
 		} elsif(m|^([\w()*\\/+-]+)[:x]([\w()*\\/+-]+)$|i) {
 			$params{'x'}=$1;
 			$params{'y'}=$2;
@@ -923,7 +942,7 @@ $F{'simple:audio:denoise'}=sub {
 		volume=%f
 	));
 
-	$volume||=2;
+	$volume//=2;
 
 	return(&fmt($denoise, $volume));
 };
@@ -998,18 +1017,6 @@ $F{'simple:audio:volume'}=sub {
 	}
 };
 
-=item mute
-
-This is just an alias for C<volume/0>.  It isn't even a shortcut, as
-C<v/0> is shorter.  But, it does read nicely and is intuitive.
-
-=cut
-
-$M{'simple:audio:mute'}='mute';
-$F{'simple:audio:mute'}=sub {
-	$F{'simple:audio:volume'}->(@_, 0);
-};
-
 =item normalize/[#]
 
 Run a set of basic normalize audio filters to the next segment.  If
@@ -1023,7 +1030,7 @@ $M{'simple:audio:normalize'}='norm[alize]*/?([\d.]*)';
 $F{'simple:audio:normalize'}=sub {
 	my($node, $volume)=@_;
 
-	$volume||=$ARG{'volume'};
+	$volume//=$ARG{'volume'};
 
 	return(&fmt('%s,volume=%f', $FFUtils::NORMALIZE, $volume));
 };
@@ -1355,7 +1362,6 @@ my(@ORDER)=qw(
 	simple:audio:denoise
 	simple:audio:normalize
 	simple:audio:volume
-	simple:audio:mute
 	simple:audio:delay
 	simple:audio:fade
 	simple:audio:ffmpeg
@@ -1368,10 +1374,178 @@ my(@ORDER)=qw(
 	simple:video:ffmpeg
 );
 
-if($ARG{'print'}=~m/order/i) {
-	print join("\n", @ORDER), "\n";
-	exit(0);
+=head2 Extending Functionality with a UserFile
+
+A file can be supplied which contains extensions to B<clips> capabilities.
+This functionality can be thought of like creating macros or aliases
+for commonly used or interesting effects in lieu of using the C<-ffmpeg>
+command-line token.  The processing order is that user extenstions are
+processed after built-in filters, and in the order in which they are defined
+in the F<UserFile>.
+
+=head3 UserFile syntax
+
+All non-blank lines not matching the following will cause errors:
+
+        <#|;|//>[Comment text]
+        user:<audio|video>:<name>  <token>[/X=a][...]  <filtername>[=options]
+	   user:transition:<key>      <xfade transition name>
+
+What this will do is create a simple audio or video filter type named C<token>.
+Optionally, C<token> can have options which are specified after.  These options
+can have default values (in case not present) and those are specified after
+an equal (=) symbol.  After that comes the L<ffmpeg-filters(1)> filter that
+should be invoked in it's entirety.  Options (e.g. C<X>) above can be used
+in the definition using the syntax C<#{X}> within the definiton.
+
+=head4 Example
+
+        # This is a comment about my awesome filters
+
+        user:audio:cave    cave/D=1000    aecho=0.5:0.4:#{D}:0.5
+	   user:audio:speech  speech/N       afftdn=nf=#{N},dialoguenhance,\
+	                                       volume=2
+	   user:video:bblur   bblur/X=5/Y=5  avgblur=sizeX=#{X}:sizeY=#{Y}
+
+	   user:transition:l  wipeleft
+
+In this example, if a person specifies the token C<cave> the audio filter
+C<aecho=0.5:0.4:1000:0.5> will be applied to the next clip.  If they specify
+C<cave/2000> then the audio filter C<aecho=0.5:0.4:2000:0.5> will be applied
+to the next clip.  For the speech token, you can see that multiple filters
+are applied all as part of one token.  This can be called like C<speech/-25>,
+but if you try to call just C<speech> it will error because (without a default)
+the parameter is mandatory.  C<speech> calls three filters, and they are
+defined across 2 lines with the help of the backslash (\) character at the
+end of the first line.  In the third example, two options are allowed
+and each have a default.  So, C<bblur/10/12> will blur with C<X=10> and C<Y=12>.
+But, C<bblur/10> will set C<X=10> and leave C<Y=5>, whereas C<bblur//10> will
+leave C<X=5> and set C<Y=10>.  This is all a little funky, but it's a simple
+macro language and so you have to forgive it's quirks.
+
+Lastly, if someone were to now place C</l> between two clips, the transition
+between the two would use the C<xfade> filter's, see L<ffmpeg-filters(1)>,
+C<wipeleft> transition effect.  Any re-use of one of the default/built-in
+shortcut keys will override the default behavior.  Note that technically,
+these transition keys can be more than one letter, so you could use
+cl, cr, ... for cover left, right, ...; sl, sr, ... for slide left, etc;
+wl, wr, ... for wipe left, ...; and so on if you wanted shortcuts for
+all the different styles.
+
+=cut
+
+sub ltrim {
+	my($s)=@_;
+	$s=~s/^\s*//;
+	return($s);
 }
+
+sub read_user_file {
+	my($file)=@_;
+	my($CONF)=IO::Handle->new;
+	my($id, $match, $macro);
+	local($_);
+
+	print "User Config:\n" if($ARG{'debug'}>5);
+
+	open($CONF, '<', $file);
+	while(<$CONF>) {
+		next if(m|^\s*[#;/].*$|);
+		next if(m|^\s*$|);
+
+		if(s/\\\s*$//) {
+			$_.=&ltrim(scalar <$CONF>);
+			redo;
+		}
+
+		if(m|^user:transition:(\w+)\s+(\w+)|) {
+			$TRANSITION{$1}=$2;
+			if($ARG{'debug'}>5) {
+				printf(" User transition: %3s = %s\n\n", $1, $2);
+			}
+		} elsif(m|^(user:[videoau]+:\w+)\s+(\w+)/?(\S*)\s+(.+)$|i) {
+			($id, $name, $opts, $macro)=@{^CAPTURE};
+
+			push(@ORDER, $id);
+			$UM{$id}=$name;
+			$UF{$id}=[$opts, $macro];
+
+			if($ARG{'debug'}>5) {
+				printf(" User filter (%s) '%s', parameters: %s\n > %s\n\n",
+					$id, $name, $opts||'NONE', $macro);
+			}
+		} else {
+			&err(11, 'User file syntax error:', $_);
+		}
+	}
+	print "\n" if($ARG{'debug'}>5);
+	close($CONF);
+}
+
+=head4 User Filter Execution
+
+Simple user filters can be run multiple times like other simple filters.
+Since these are user defined, the effects of doing so are entirely on
+you.  The process of running them is a very simple macro expantion/substitution
+of the arguments supplied on the command-line token into the definition
+string, and then it is added to the audio or video stream as appropriate.
+Arguments must be in the exact same order
+
+=cut
+
+sub run_simple_user {
+	my($id, @args)=@_;
+	my(@params)=split(m|/|, $UF{$id}[0]);
+	my(@keys)=();
+	my($map)={};
+
+	foreach my $param (@params) {
+		if($param=~m/^(\w+)=(.*)$/) {
+			$map->{$1}=$2;
+			push(@keys, $1);
+		} elsif($param=~m/^(\w+)$/) {
+			$map->{$1}=undef;
+			push(@keys, $1);
+		} else {
+			&err(11, 'User filter definition not understood:', $param);
+		}
+	}
+
+	while(@args) {
+		if(length($args[0])>0) {
+			$map->{shift(@keys)}=shift(@args);
+		} else {
+			shift(@keys);
+			shift(@args);
+		}
+	}
+
+	foreach my $key (keys(%$map)) {
+		unless(defined($map->{$key})) {
+			&err(11, $id, '- key', $key,
+				"not provided and doesn't have a default:\n ", $UF{$id}[1]);
+		}
+	}
+
+	return(&fmt($UF{$id}[1], $map));
+}
+
+=head2 Parsing Structure
+
+B<clips> is essentially a 2 pass compiler.  In the first pass, it tokenizes
+the command-line and creates a tree-like execution structure for the commands
+provided.  In this pass, unary, binary (e.g. C</> and C<%>), and matching
+(e.g. C<{> and C<}> operators are inserted into the tree and it's data is
+enhanced using all of the information found throughout the command-line.
+
+In the second pass, that tree is turned into an executable L<ffmpeg(1)>
+command which can be run.  Each node in the tree is examined to determine
+which actions are taken, assign video streams as appropriate, and
+implement the filters to make each stage happen.  The tree is parsed in
+a depth-first fashion, culminating with the root node being the final
+stiching together of the output video.
+
+=cut
 
 my($I)=0;
 sub node {
@@ -1634,6 +1808,13 @@ sub parse {
 				}
 			}
 
+			foreach my $user (grep(m/^user:/, @ORDER)) {
+				if(m|^$UM{$user}/?(.*)$|) {
+					push(@{$filt{$user}}, [split(m|/|, $1)]);
+					$found=1;
+				}
+			}
+
 			unless($found) {
 				&err(1, "'$_' not understood, or file does not exist.");
 			}
@@ -1710,6 +1891,22 @@ sub generate_filters {
 			if(ref($node->{$filter}[0]) eq 'ARRAY') {
 				foreach my $run (@{$node->{$filter}}) {
 					push(@video, $F{$filter}->($node, @$run));
+				}
+			} else {
+				push(@video, $F{$filter}->($node, @{$node->{$filter}}));
+			}
+		} elsif($filter=~m|user:audio| && exists($node->{$filter})) {
+			if(ref($node->{$filter}[0]) eq 'ARRAY') {
+				foreach my $run (@{$node->{$filter}}) {
+					push(@audio, &run_simple_user($filter, @$run));
+				}
+			} else {
+				push(@audio, $F{$filter}->($node, @{$node->{$filter}}));
+			}
+		} elsif($filter=~m|user:video| && exists($node->{$filter})) {
+			if(ref($node->{$filter}[0]) eq 'ARRAY') {
+				foreach my $run (@{$node->{$filter}}) {
+					push(@video, &run_simple_user($filter, @$run));
 				}
 			} else {
 				push(@video, $F{$filter}->($node, @{$node->{$filter}}));
@@ -1808,6 +2005,30 @@ this program for execution.
 
 =cut
 
+&read_user_file($ARG{'userfile'}) if($ARG{'userfile'});
+
+if($ARG{'print'}=~m/order/i || $ARG{'debug'}>3) {
+	print "Execution Order:\n ";
+	print join("\n ", @ORDER), "\n";
+	if($ARG{'print'}=~m/order/i) {
+		exit(0);
+	} else {
+		print "\n";
+	}
+}
+
+if($ARG{'print'}=~m/transition/i || $ARG{'debug'}>4) {
+	print "Transition Shortcut Keys:\n";
+	foreach my $key (sort(keys(%TRANSITION))) {
+		printf("%3s = %s\n", $key, $TRANSITION{$key});
+	}
+	if($ARG{'print'}=~m/transition/i) {
+		exit(0);
+	} else {
+		print "\n";
+	}
+}
+
 $ROOT=&parse(@ARGV);
 &compute_lengths($ROOT);
 
@@ -1890,7 +2111,7 @@ if($DST=~m/^(mpv|preview|watch|-)$/i) {
 	}
 
 	if($?) {
-		print STDERR "ffmpeg exited with errors.\n";
+		printf(STDERR "ffmpeg exited with errors (exit value: %d).\n", $?>>8);
 	} else {
 		printf("\nOutput file:\n'%s' (%s)\n", $DST,
 			FFUtils::secs2time($ROOT->{'length'}));
@@ -1900,6 +2121,18 @@ if($DST=~m/^(mpv|preview|watch|-)$/i) {
 if($ARG{'dry-run'}) {
 	print "</DRY-RUN>\n";
 }
+
+=head1 ENVIRONMENT
+
+=over 8
+
+=item CLIPS_USERFILE
+
+If set, this environment variable should reference a configuration
+file location for user defined tokens.  See
+L<Extending Functionality with a UserFile> above.
+
+=back
 
 =head1 NOTES
 

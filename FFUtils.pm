@@ -72,17 +72,14 @@ sub probe {
 sub has_video {
 	my($file)=@_;
 	my($probe)=IO::Handle->new;
-	my(@ffprobe)=qw(ffprobe -show_streams -v quiet);
+	my(@ffprobe)=qw(ffprobe -show_streams -v quiet -select_streams v);
 	my($video)=undef;
-	local($/)='[/STREAM]';
 
 	if(-r $file) {
 		open($probe, '-|', @ffprobe, $file);
 		while(<$probe>) {
-			if(m/^codec_type=video/m) {
-				$video=1 if(m/^avg_frame_rate=[1-9]/m);
-				$video=1 if(m/^nal_length_size=\d/m);
-			}
+			$video=1 if(m/^avg_frame_rate=[1-9]/m);
+			$video=1 if(m/^nal_length_size=\d/m);
 		}
 		close($probe);
 	}
@@ -121,18 +118,16 @@ sub framerate {
 	return(&probe($_[0], 'r_frame_rate'));
 }
 
-sub bounded_attribute {
-	my($min, $attr, $max, @files)=@_;
+sub clamp {
+	my($l, $v, $h)=@_;
 
-	return(
-		List::Util::min(
-			$max,
-			List::Util::max(
-				$min,
-				map(&probe($_, $attr), @files)
-			)
-		)
-	);
+	return(  ($v<$l) ? $l : ($v>$h) ? $h : $v );
+}
+
+sub bounded_attribute {
+	my($min, $attr, $max, $file)=@_;
+
+	return(&clamp($min, &probe($file, $attr), $max));
 }
 
 sub target_height {
