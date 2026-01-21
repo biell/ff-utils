@@ -5,12 +5,22 @@
 # This file contains personalized transitions and filters for
 # use with the `clips` video editor.
 #
+# Appart from user defined macros, the following are provided to
+# each user filter by clips:
+#
+#  * _W - Video width
+#  * _H - Video height
+#  * _L - Audio or Video length (duration) in seconds
+#  * _F - Video frames/second as a floating point number
+#
 ###################################################################
                    
 user:transition:r    radial
 
 user:audio:mute      mute                volume=0
-user:audio:cave      cave/D=1000         aecho=0.5:0.4:#{D}:0.5
+user:audio:cave      cave/D=1100         aecho=1:0.7:#{D}:0.7,\
+                                         aecho=0.8:0.6:#{D}:0.6,\
+								 atrim=duration=#{_L}
 
 user:audio:speech    speech/N            afftdn=nf=#{N},dialoguenhance,\
                                          volume=2
@@ -20,10 +30,11 @@ user:audio:roadnoise roadnoise/V=2/N=-25 afftdn=nf=#{N},highpass,lowpass,\
 user:video:bblur     bblur/X=5/Y=5       avgblur=sizeX=#{X}:sizeY=#{Y}
 
 # Turn a 4K video into a stabilized 2K video
-user:video:ds4to2k_1 ds4to2k_1           deshake=rx=32:ry=32,\
+user:video:ds4to2k_1 ds4to2k_1           deshake=rx=32:ry=24,\
                                          crop=3200:1800:320:180,\
-								 scale=2560:1440
+                                         scale=2560:1440
 
-user:video:ds4to2k_2 ds4to2k_2           deshake=rx=64:ry=64,\
+user:video:ds4to2k_2 ds4to2k_2           deshake=rx=64:ry=48,\
                                          crop=3200:1800:320:180,\
-								 scale=2560:1440
+                                         scale=2560:1440
+

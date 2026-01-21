@@ -280,6 +280,7 @@ sub debugtreesort {
 		length    23
 		width     24
 		height    25
+		fps       26
 		merge     30
 		timer     31
 		video     40
@@ -529,7 +530,8 @@ $F{'simple:video:fps'}=sub {
 
 	$fps||=$ARG{'rate'};
 
-	if($fps != $SOURCES{$node->{'file'}}{'framerate'}) {
+	if($fps != $node->{'fps'}) {
+		$node->{'fps'}=$fps;
 		return(&fmt('fps=fps=%f,settb=AVTB', $fps));
 	}
 };
@@ -784,38 +786,47 @@ Note that any string that starts with C<fade> and ends with C<in> will work
 
 This is basically the same as C<fade-in> except it fades out.  It should
 not be used as the first argument.  Uniary tokens should always come before
-clip they affect; however, there is one exception when C<fade-out> is the very
-last argument of the command, then it will apply to the clip directly before 
-it.
+clip they affect; however, this one (and blur-out) are the exceptions.
+This is a rare postfix operator in B<clips>, it actually neesd to come
+after the clip it affects; most likely as the last token on the command-line.
 
 =cut
 
-$M{'simple:video:fade'}='fade.*(in|out)/?([\d.]*)';
-$F{'simple:video:fade'}=sub {
+$M{'complex:fade'}='fade.*(in|out)/?([\d.]*)';
+$F{'complex:fade'}=sub {
 	my($node, $type, $length)=@_;
-	my($fade)='fade=t=%s:st=%f:d=%f';
+	my($vout, $aout)=&next_labels($node);
+	my(@fade)=();
+	my(%macros);
 
 	$length||=$ARG{'fade'};
+	$type=lc($type);
 
-	if($type=~m/in/i) {
-		return(&fmt($fade, 'in', 0, $length));
-	} else {
-		return(&fmt($fade, 'out', $node->{'length'}-$length, $length));
+	if($length>$node->{'length'}) {
+		&err(11, "Fade cannot be longer than the actual clip.");
 	}
-};
 
-$M{'simple:audio:fade'}='fade.*(in|out)/?([\d.]*)';
-$F{'simple:audio:fade'}=sub {
-	my($node, $type, $length)=@_;
-	my($fade)='afade=t=%s:st=%f:d=%f:curve=qua';
+	%macros=(
+		'T'	=> lc($type),
+		'S'	=> ($type eq 'out')?$node->{'length'}-$length:0,
+		'D'	=> $length,
+	);
 
-	$length||=$ARG{'fade'};
+	push(@fade, &fmt('#{I}fade=t=#{T}:st=#{S}:d=#{D}#{O}', {
+		'I'	=> $node->{'tree'}[0]{'video'},
+		'O'	=> $vout,
+		%macros
+	}));
+	push(@fade, &fmt('#{I}afade=t=#{T}:st=#{S}:d=#{D}:curve=qua#{O}', {
+		'I'	=> $node->{'tree'}[0]{'audio'},
+		'O'	=> $aout,
+		%macros,
+	}));
 
-	if($type=~m/in/i) {
-		return(&fmt($fade, 'in', 0, $length));
-	} else {
-		return(&fmt($fade, 'out', $node->{'length'}-$length, $length));
-	}
+	$node->{'audio'}=$aout;
+	$node->{'video'}=$vout;
+
+	return(@fade);
 };
 
 =item blur-in[/time]
@@ -828,16 +839,12 @@ blur to give it a more familiar feel.
 
 =item blur-out[/time]
 
-Fade out from  the video with a blur effect.  The video will start crisp
+Fade out from the video with a blur effect.  The video will start crisp
 and become blury over C<time> seconds.  It works the same as C<blur-in>,
 just backwards.
 
-Note that this is a little funky in the way that it processes the blur-out,
-and so the blur-out may override/erase other filters.  Burying it in two
-layers of groupings C<{ { ... blur-out } }> will ensure it is encapsulated
-properly.  This is partially due to the forced order in which filters are
-applied (see C<clips -print=order>) and partly to do with the way the
-blur-out is blended together.
+Note that this is a rare postfix operator, it actually neesd to come
+after the clip it affects.
 
 =cut
 
@@ -846,77 +853,54 @@ blur-out is blended together.
 $M{'complex:blur'}='blur.*(in|out)/?([\d.]*)';
 $F{'complex:blur'}=sub {
 	my($node, $type, $length)=@_;
-	my($vb, $ab)=&next_labels($node);
-	my($vd, $ad)=&next_labels($node);
-	my($vout, $aout)=&next_labels($node);
+	my($ifin)=($type=~m/in/i);
 	my(@blur)=();
+	my($macros);
 
 	$length||=$ARG{'fade'};
+	($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
-	if($type=~m/in/i) {
-		push(@blur, &fmt('#{I}afade=t=#{T}:st=#{S}:d=#{L}:curve=#{C}#{O}', {
-				'I'	=> $node->{'tree'}[0]{'audio'},
-				'T'	=> 'in',
-				'S'	=> 0,
-				'L'	=> $length,
-				'C'	=> 'qua',
-				'O'	=> $aout,
-			}));
-
-		push(@blur, &fmt('#{I}gblur=sigma=#{R}:#{E}#{O}', {
-				'I' => $node->{'tree'}[0]{'video'},
-				'R' => 40,
-				'E' => "enable=lte(t\\,$length)",
-				'O' => $vb,
-			}));
-
-		push(@blur, &fmt('#{I1}#{I2}blend=#{T}:#{E},eq=#{B}:#{C}:#{E}#{O}', {
-				'I1' => $node->{'tree'}[0]{'video'},
-				'I2' => $vb,
-				'S'	=> 0,
-				'L'	=> $length,
-				'R'	=> "((T-#{S})/#{L})",
-				'T'	=> "all_expr=(T/#{L})*A+(1-T/#{L})*B",
-				'B'	=> "brightness=t/(#{L}*10)-0.1",
-				'E'	=> "enable=lte(t\\,#{L})",
-				'C'	=> 'eval=frame',
-				'O'	=> $vout,
-			}));
-	} else {
-		$start=$node->{'length'}-$length;
-
-		push(@blur, &fmt('#{I}afade=t=#{T}:st=#{S}:d=#{L}:curve=#{C}#{O}', {
-				'I'	=> $node->{'tree'}[0]{'audio'},
-				'T'	=> 'out',
-				'S'	=> $node->{'length'}-$length,
-				'L'	=> $length,
-				'C'	=> 'qua',
-				'O'	=> $aout,
-			}));
-
-		push(@blur, &fmt('#{I}gblur=sigma=#{R}:#E#{O}', {
-				'I'	=> $node->{'tree'}[0]{'video'},
-				'R'	=> 40,
-				'E'	=> "enable=gte(t\\,$start)",
-				'O'	=> $vb,
-			}));
-
-		push(@blur, &fmt('#{I1}#{I2}blend=#{T}:#{E},eq=#{B}:#{C}:#{E}#{O}', {
-				'I1' => $vb,
-				'I2' => $node->{'tree'}[0]{'video'},
-				'S'	=> $node->{'length'}-$length,
-				'L'	=> $length,
-				'R'	=> "((T-#{S})/#{L})",
-				'T'	=> "all_expr=#{R}*A+(1-#{R})*B",
-				'B'	=> "brightness=(#{S}-t)/(#{L}*10)",
-				'E'	=> "enable=gte(t\\,#{S})",
-				'C'	=> 'eval=frame',
-				'O'	=> $vout,
-			}));
+	if($length>$node->{'length'}) {
+		&err(11, "Blur cannot be longer than the actual clip.");
 	}
 
-	$node->{'audio'}=$aout;
-	$node->{'video'}=$vout;
+	$macros={
+		'Iv'	=> $node->{'tree'}[0]{'video'},
+		'Ia'	=> $node->{'tree'}[0]{'audio'},
+		'I1'	=> &next_labels($node, 'video'),
+		'I2'	=> &next_labels($node, 'video'),
+		'T'	=> lc($type),
+		'D'	=> $length,
+		'C'	=> 'qua',
+		'N'	=> 60,
+		'B'	=> -0.15,
+
+		'Si'	=> 0,
+		'Ri'	=> "pow(T-#{S}\\,2)/pow(#{D}\\,2)",
+		'Ai'	=> "(#{Ri})*A+(1-#{Ri})*B",
+
+		'So'	=> $node->{'length'}-$length,
+		'Ro'	=> "sqrt((T-#{S})/#{D})",
+		'Ao'	=> "(1-#{Ro})*A+(#{Ro})*B",
+
+		'S'	=> $ifin ? "#{Si}" : "#{So}",
+		'A'	=> $ifin ? "#{Ai}" : "#{Ao}",
+
+		'E'	=> "enable=between(t\\,#{S}\\,#{S}+#{D})",
+		'Ob'	=> &next_labels($node, 'video'),
+		'Ov'	=> $node->{'video'},
+		'Oa'	=> $node->{'audio'},
+
+	};
+
+	push(@blur, &fmt('#{Ia}afade=t=#{T}:st=#{S}:d=#{D}:curve=#{C}#{Oa}',
+		$macros));
+	push(@blur, &fmt('#{Iv}split#{I1}#{I2}',
+		$macros));
+	push(@blur, &fmt('#{I1}gblur=#{N}:#{E},eq=brightness=#{B}:#{E}#{Ob}',
+		$macros));
+	push(@blur, &fmt('#{I2}#{Ob}blend=all_expr=#{A}:#{E}#{Ov}',
+		$macros));
 
 	return(@blur);
 };
@@ -1066,10 +1050,14 @@ $F{'complex:transition'}=sub {
 	my($offset)=$l->{'length'}-$time;
 	my(@fade)=();
 
-	&copykeys($l => $node, 'width', 'height');
+	&copykeys($l => $node, 'width', 'height', 'fps');
 	($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
 	$type=$TRANSITION{$type} || $type;
+
+	if($time>$l->{'length'} || $time>$r->{'length'}) {
+		&err(11, "Transition cannot be longer than the actual clip.");
+	}
 
 	push(@fade,
 		&fmt('#{IL}#{IR}acrossfade=d=#{D}:c1=#{C1}:c2=#{C2}#{O}', {
@@ -1136,10 +1124,10 @@ $F{'complex:overlay'}=sub {
 	my($main)=$node->{'tree'}[0];
 	my($over)=$node->{'tree'}[1];
 	my($alpha, $color, $position)=(undef, undef, 'x=0:y=0');
-	my($valpha, $junk)=&next_labels($node);
+	my($valpha)=&next_labels($node, 'video' => 1);
 	my(@overlay)=();
 
-	&copykeys($main => $node, 'width', 'height');
+	&copykeys($main => $node, 'width', 'height', 'fps');
 	($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
 	foreach my $option (split(m|/|, $config)) {
@@ -1214,7 +1202,7 @@ $F{'complex:stack'}=sub {
 		push(@ain, $sub->{'audio'});
 	}
 
-	&copykeys($node->{'tree'}[0] => $node, 'width', 'height');
+	&copykeys($node->{'tree'}[0] => $node, 'width', 'height', 'fps');
 	if($type eq 'h') {
 		$node->{'width'}=List::Util::sum(
 			map($_->{'width'}, @{$node->{'tree'}})
@@ -1252,7 +1240,7 @@ $F{'complex:concat'}=sub {
 	my(@inputs)=();
 	my(@concat)=();
 
-	&copykeys($node->{'tree'}[0] => $node, 'width', 'height');
+	&copykeys($node->{'tree'}[0] => $node, 'width', 'height', 'fps');
 
 	foreach my $child (@{$node->{'tree'}}) {
 		push(@inputs, $child->{'video'}, $child->{'audio'});
@@ -1260,7 +1248,7 @@ $F{'complex:concat'}=sub {
 	}
 
 	if($count==1) {
-		&copykeys($node->{'tree'}[0] => $node, 'video', 'audio');
+		&copykeys($node->{'tree'}[0] => $node, 'video', 'audio', 'fps');
 	} else {
 		($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
@@ -1282,7 +1270,7 @@ $F{'complex:aoverlay'}=sub {
 	my($vout, $aout)=&next_labels($node);
 	my(@ain)=();
 
-	&copykeys($node->{'tree'}[0] => $node, 'video', 'width', 'height');
+	&copykeys($node->{'tree'}[0] => $node, 'video', 'width', 'height', 'fps');
 	$node->{'audio'}=$aout;
 
 	foreach my $child (@{$node->{'tree'}}) {
@@ -1357,20 +1345,19 @@ my(@ORDER)=qw(
 	complex:aoverlay
 	complex:overlay
 	complex:transition
+	complex:fade
 	complex:blur
 	complex:speed
 	simple:audio:denoise
 	simple:audio:normalize
 	simple:audio:volume
 	simple:audio:delay
-	simple:audio:fade
 	simple:audio:ffmpeg
 	simple:video:fps
 	simple:video:text
 	simple:video:crop
 	simple:video:scale
 	simple:video:flip
-	simple:video:fade
 	simple:video:ffmpeg
 );
 
@@ -1397,6 +1384,30 @@ can have default values (in case not present) and those are specified after
 an equal (=) symbol.  After that comes the L<ffmpeg-filters(1)> filter that
 should be invoked in it's entirety.  Options (e.g. C<X>) above can be used
 in the definition using the syntax C<#{X}> within the definiton.
+
+Note, B<clips> provides following built-in macros which can be used within
+any user definition:
+
+=over 8
+
+=item _W
+
+This stores the width of the current stream (assuming it is a video stream).
+
+=item _H
+
+This stores the height of the current stream (assuming it is a video stream).
+
+=item _L
+
+This stores the length, in seconds, of the current stream.
+
+=item _F
+
+This stores the frames/second (aka frame rate) of the file as a floating-point
+number.
+
+=back
 
 =head4 Example
 
@@ -1489,15 +1500,23 @@ Since these are user defined, the effects of doing so are entirely on
 you.  The process of running them is a very simple macro expantion/substitution
 of the arguments supplied on the command-line token into the definition
 string, and then it is added to the audio or video stream as appropriate.
-Arguments must be in the exact same order
+Arguments must be in the exact same order as they are listed in the
+definition.  If you want to keep the default value, you can skip the
+parameter by leaving it empty, but you still need to provide the slash (/)
+delimeter.
 
 =cut
 
 sub run_simple_user {
-	my($id, @args)=@_;
+	my($node, $id, @args)=@_;
 	my(@params)=split(m|/|, $UF{$id}[0]);
 	my(@keys)=();
-	my($map)={};
+	my($map)={
+		'_W'	=> $node->{'width'},
+		'_H'	=> $node->{'height'},
+		'_L'	=> $node->{'length'},
+		'_F'	=> $node->{'fps'},
+	};
 
 	foreach my $param (@params) {
 		if($param=~m/^(\w+)=(.*)$/) {
@@ -1571,7 +1590,7 @@ sub node {
 sub insert_branch {
 	my($leaf, $branch)=@_;
 	my($trunk)=$leaf->{'parent'};
-	my(@attrs)=qw(parent video audio width height);
+	my(@attrs)=qw(parent video audio width height fps);
 
 	&copykeys($leaf => $branch, @attrs);
 
@@ -1582,14 +1601,38 @@ sub insert_branch {
 }
 
 sub next_labels {
-	my($node)=@_;
+	my($node, %opt)=@_;
+	my($i, $s)=(\$node->{'index'}, \$node->{'step'});
+	my(@labels)=();
 
-	$node->{'step'}+=1;
+	if(%opt) {
+		if(exists($opt{'video'})) {
+			if(defined($opt{'video'})) {
+				while($opt{'video'}>0) {
+					push(@labels, &fmt('[v%d.%d]', $$i, $$s++));
+					$opt{'video'}--;
+				}
+			} else {
+				push(@labels, &fmt('[v%d.%d]', $$i, $$s++));
+			}
+		}
+		if(exists($opt{'audio'})) {
+			if(defined($opt{'audio'})) {
+				while($opt{'audio'}>0) {
+					push(@labels, &fmt('[a%d.%d]', $$i, $$s++));
+					$opt{'audio'}--;
+				}
+			} else {
+				push(@labels, &fmt('[a%d.%d]', $$i, $$s++));
+			}
+		}
+	} else {
+		push(@labels,
+			&fmt('[v%d.%d]', $$i, $$s), &fmt('[a%d.%d]', $$i, $$s));
+		$$s++;
+	}
 
-	return(
-		&fmt('[v%d.%d]', $node->{'index'}, $node->{'step'}),
-		&fmt('[a%d.%d]', $node->{'index'}, $node->{'step'}),
-	);
+	return(@labels);
 }
 
 #Note: 'complex' filters should be given their own node in the tree.
@@ -1626,6 +1669,23 @@ sub parse {
 			push(@{$cur->{'tree'}}, $node);
 			$cur=$node;
 			#Filters aren't applied here, forcing them down to the child
+		} elsif(@args=m|^$M{'complex:fade'}|i) {
+			my($node)=&node(
+				'type'		=> 'complex',
+				'parent'		=> $cur,
+				'complex:fade'	=> [@args],
+			);
+
+			if($args[0]=~m/out/i) {
+				my($last)=pop(@{$cur->{'tree'}}) || &err(7,
+					'fadeout is a postfix operator (after a clip).');
+				$cur=&insert_branch($last => $node)->{'parent'};
+			} else {
+				push(@{$cur->{'tree'}}, $node);
+				$cur=$node;
+			}
+
+			#Filters aren't applied here, forcing them down to the child
 		} elsif(@args=m|^$M{'complex:blur'}|i) {
 			my($node)=&node(
 				'type'		=> 'complex',
@@ -1633,8 +1693,14 @@ sub parse {
 				'complex:blur'	=> [@args],
 			);
 
-			push(@{$cur->{'tree'}}, $node);
-			$cur=$node;
+			if($args[0]=~m/out/i) {
+				my($last)=pop(@{$cur->{'tree'}}) || &err(7,
+					'blurout is a postfix operator (after a clip).');
+				$cur=&insert_branch($last => $node)->{'parent'};
+			} else {
+				push(@{$cur->{'tree'}}, $node);
+				$cur=$node;
+			}
 
 			#Filters aren't applied here, forcing them down to the child
 		} elsif(m|^/([\d.]*)/?([a-zA-Z]*)|) {	#Binary operator
@@ -1706,19 +1772,6 @@ sub parse {
 				&err(4, "Syntax error closing a group that doesn't exist.");
 			}
 
-			#We treat '{fade,blur}-out' as a special case and allow it at the end:
-			if(%filt && $filt{'simple:audio:fade'}) {
-				push(@{$cur->{'parent'}{'simple:audio:fade'}},
-					@{$filt{'simple:audio:fade'}});
-				push(@{$cur->{'parent'}{'simple:video:fade'}},
-					@{$filt{'simple:video:fade'}});
-				delete($filt{'simple:audio:fade'});
-				delete($filt{'simple:video:fade'});
-			} elsif(%filt && $filt{'complex:blur'}) {
-				$cur->{'parent'}{'complex:blur'}=$filt{'complex:blur'};
-				delete($filt{'complex:blur'});
-			}
-
 			if(%filt) {
 				&err(4, 'Filter tokens are missing a clip:', keys(%filt));
 			}
@@ -1739,7 +1792,17 @@ sub parse {
 				}
 			}
 
-			$cur=$cur->{'parent'};
+			while($cur->{'type'} eq 'complex') { #bubble out
+				$cur=$cur->{'parent'};
+			}
+			if($cur->{'type'} eq 'group') {
+				$cur=$cur->{'parent'};
+			} else {
+				&err(98, 'Tree structure is invalid.');
+			}
+			while($cur->{'type'} eq 'complex') { #bubble out
+				$cur=$cur->{'parent'};
+			}
 
 		} elsif(m/^([\d:.]+)-([\d:.]+)?\s*$/) {
 			my($start)=FFUtils::time2secs($1);
@@ -1763,6 +1826,7 @@ sub parse {
 				$node->{'video'}=&fmt('[%d:v]', $stream);
 				$node->{'width'}=$SOURCES{$src}{'width'};
 				$node->{'height'}=$SOURCES{$src}{'height'};
+				$node->{'fps'}=$SOURCES{$src}{'fps'};
 			} else {
 				$node->{'width'}=0;
 				$node->{'height'}=0;
@@ -1790,8 +1854,9 @@ sub parse {
 			if($end > $SOURCES{$src}{'length'}) {
 				&err(3, "'$2' is past the end of $src.");
 			}
+
 			push(@{$cur->{'tree'}}, $node);
-			if($cur->{'type'} eq 'complex') { #pop out
+			while($cur->{'type'} eq 'complex') { #bubble out
 				$cur=$cur->{'parent'};
 			}
 
@@ -1821,16 +1886,6 @@ sub parse {
 		}
 	}
 
-	#We treat '{fade,blur}-out' as a special case and allow it at the end:
-	if(%filt && $filt{'simple:audio:fade'}) {
-		push(@{$root->{'simple:audio:fade'}}, @{$filt{'simple:audio:fade'}});
-		push(@{$root->{'simple:video:fade'}}, @{$filt{'simple:video:fade'}});
-		delete($filt{'simple:audio:fade'});
-		delete($filt{'simple:video:fade'});
-	} elsif(%filt && $filt{'complex:blur'}) {
-		$root->{'complex:blur'}=$filt{'complex:blur'};
-		delete($filt{'complex:blur'});
-	}
 	if(%filt) {
 		&err(4, 'Filter tokens are missing a clip:', keys(%filt));
 	}
@@ -1898,7 +1953,7 @@ sub generate_filters {
 		} elsif($filter=~m|user:audio| && exists($node->{$filter})) {
 			if(ref($node->{$filter}[0]) eq 'ARRAY') {
 				foreach my $run (@{$node->{$filter}}) {
-					push(@audio, &run_simple_user($filter, @$run));
+					push(@audio, &run_simple_user($node, $filter, @$run));
 				}
 			} else {
 				push(@audio, $F{$filter}->($node, @{$node->{$filter}}));
@@ -1906,7 +1961,7 @@ sub generate_filters {
 		} elsif($filter=~m|user:video| && exists($node->{$filter})) {
 			if(ref($node->{$filter}[0]) eq 'ARRAY') {
 				foreach my $run (@{$node->{$filter}}) {
-					push(@video, &run_simple_user($filter, @$run));
+					push(@video, &run_simple_user($node, $filter, @$run));
 				}
 			} else {
 				push(@video, $F{$filter}->($node, @{$node->{$filter}}));
@@ -2295,11 +2350,16 @@ An error was made in specifying overlay parameters.
 
 =item Z<>9
 
-An stacking undefined stacking parameter was sent to complex:stack
+An undefined stacking parameter was sent to complex:stack
 
 =item Z<>10
 
 A speed change parameter was entered out of the allowed range.
+
+=item Z<>11
+
+A request was made to make a transition, fade, etc. that would start or
+end beyond the actual length of the clip.
 
 =back
 
