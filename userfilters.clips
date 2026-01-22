@@ -20,13 +20,14 @@ user:transition:r    radial
 user:audio:mute      mute                volume=0
 user:audio:cave      cave/D=1100         aecho=1:0.7:#{D}:0.7,\
                                          aecho=0.8:0.6:#{D}:0.6,\
-								 atrim=duration=#{_L}
+                                         atrim=duration=#{_L}
 
 user:audio:speech    speech/N            afftdn=nf=#{N},dialoguenhance,\
                                          volume=2
 user:audio:roadnoise roadnoise/V=2/N=-25 afftdn=nf=#{N},highpass,lowpass,\
                                          afwtdn,dialoguenhance,volume=#{N}
 
+user:video:gamma     gamma/N=0.8         eq=gamma=#{N}
 user:video:bblur     bblur/X=5/Y=5       avgblur=sizeX=#{X}:sizeY=#{Y}
 
 # Turn a 4K video into a stabilized 2K video
