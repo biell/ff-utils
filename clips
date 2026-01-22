@@ -259,9 +259,9 @@ if($ARG{'audio-only'}) {
 #and should, therefore, not have labels and just return a sequence of
 #filters to be chained together.
 #
-#Any `complex:*` filters will not receive automated labels, and you need to
-#manage that yourself, along with updating $node->{'video'} and
-#$node->{'audio'}
+#Any `group:*` and `complex:*` filters will not receive automated labels,
+#and you need to #manage that yourself, along with updating
+#$node->{'video'} and $node->{'audio'}
 
 my(%M)=();	#Filter Match
 my(%F)=();	#Filter Functions
@@ -843,12 +843,10 @@ Fade out from the video with a blur effect.  The video will start crisp
 and become blury over C<time> seconds.  It works the same as C<blur-in>,
 just backwards.
 
-Note that this is a rare postfix operator, it actually neesd to come
+Note that this is a rare postfix operator, it must come
 after the clip it affects.
 
 =cut
-
-#This is still buggy when used with other filters, something to work on
 
 $M{'complex:blur'}='blur.*(in|out)/?([\d.]*)';
 $F{'complex:blur'}=sub {
@@ -878,15 +876,17 @@ $F{'complex:blur'}=sub {
 		'Si'	=> 0,
 		'Ri'	=> "pow(T-#{S}\\,2)/pow(#{D}\\,2)",
 		'Ai'	=> "(#{Ri})*A+(1-#{Ri})*B",
+		'Ei'	=> "lte(t\\,#{D})",
 
 		'So'	=> $node->{'length'}-$length,
 		'Ro'	=> "sqrt((T-#{S})/#{D})",
 		'Ao'	=> "(1-#{Ro})*A+(#{Ro})*B",
+		'Eo'	=> "gte(t\\,#{S})",
 
 		'S'	=> $ifin ? "#{Si}" : "#{So}",
 		'A'	=> $ifin ? "#{Ai}" : "#{Ao}",
 
-		'E'	=> "enable=between(t\\,#{S}\\,#{S}+#{D})",
+		'E'	=> $ifin ? "enable=#{Ei}" : "enable=#{Eo}",
 		'Ob'	=> &next_labels($node, 'video'),
 		'Ov'	=> $node->{'video'},
 		'Oa'	=> $node->{'audio'},
@@ -903,6 +903,29 @@ $F{'complex:blur'}=sub {
 		$macros));
 
 	return(@blur);
+};
+
+=item audio
+
+An extremely simple token to extract only the audio content from a clip.
+Note, there is no analogous token for videos as man complex filters
+expect a video to have audio.  If you need to supress audio from a
+video clip, you can use C<v/0> to set the volume to 0.
+
+=cut
+
+$M{'complex:audio'}='audio';
+$F{'complex:audio'}=sub {
+	my($node)=@_;
+
+	&copykeys($node->{'tree'}[0] => $node, 'audio');
+
+	$node->{'video'}=undef;
+	$node->{'fps'}=undef;
+	$node->{'width'}=undef;
+	$node->{'height'}=undef;
+
+	return();
 };
 
 =item denoise[/#]
@@ -1044,6 +1067,7 @@ do so with a dissolve fade, do so with the wind left-to-right, and a standard
 
 =cut
 
+$M{'complex:transition'}='/([\d.]*)/?([a-zA-Z]*)';
 $F{'complex:transition'}=sub {
 	my($node, $time, $type)=@_;
 	my($l, $r)=($node->{'tree'}[0], $node->{'tree'}[1]);
@@ -1119,6 +1143,7 @@ and options if you want, or you don't have to.
 
 =cut
 
+$M{'complex:overlay'}='%/?(.*)';
 $F{'complex:overlay'}=sub {
 	my($node, $config)=@_;
 	my($main)=$node->{'tree'}[0];
@@ -1191,7 +1216,8 @@ inputs and command-line tokens.
 
 =cut
 
-$F{'complex:stack'}=sub {
+$M{'group:stack'}='{/?([hv])';
+$F{'group:stack'}=sub {
 	my($node, $type)=@_;
 	my(@vin)=();
 	my(@ain)=();
@@ -1234,7 +1260,8 @@ $F{'complex:stack'}=sub {
 	return(@stack);
 };
 
-$F{'complex:concat'}=sub {
+$M{'group:concat'}='{/?c?';
+$F{'group:concat'}=sub {
 	my($node)=@_;
 	my($count)=0;
 	my(@inputs)=();
@@ -1265,7 +1292,8 @@ $F{'complex:concat'}=sub {
 	return(@concat);
 };
 
-$F{'complex:aoverlay'}=sub {
+$M{'group:aoverlay'}='{/?a';
+$F{'group:aoverlay'}=sub {
 	my($node)=@_;
 	my($vout, $aout)=&next_labels($node);
 	my(@ain)=();
@@ -1340,9 +1368,10 @@ run C<clips -print=order>.
 =cut
 
 my(@ORDER)=qw(
-	complex:stack
-	complex:concat
-	complex:aoverlay
+	group:stack
+	group:concat
+	group:aoverlay
+	complex:audio
 	complex:overlay
 	complex:transition
 	complex:fade
@@ -1414,11 +1443,11 @@ number.
         # This is a comment about my awesome filters
 
         user:audio:cave    cave/D=1000    aecho=0.5:0.4:#{D}:0.5
-	   user:audio:speech  speech/N       afftdn=nf=#{N},dialoguenhance,\
-	                                       volume=2
-	   user:video:bblur   bblur/X=5/Y=5  avgblur=sizeX=#{X}:sizeY=#{Y}
+        user:audio:speech  speech/N       afftdn=nf=#{N},dialoguenhance,\
+                                          volume=2
+        user:video:bblur   bblur/X=5/Y=5  avgblur=sizeX=#{X}:sizeY=#{Y}
 
-	   user:transition:l  wipeleft
+        user:transition:l  wipeleft
 
 In this example, if a person specifies the token C<cave> the audio filter
 C<aecho=0.5:0.4:1000:0.5> will be applied to the next clip.  If they specify
@@ -1640,7 +1669,7 @@ sub next_labels {
 sub parse {
 	my($root)=&node(
 		'type'			=> 'root',
-		'complex:concat'	=> [],
+		'group:concat'		=> [],
 	);
 	my($cur)=$root;
 	my(%filt)=();
@@ -1659,21 +1688,11 @@ sub parse {
 				'video'	=> FFUtils::has_video($src),
 				'audio'	=> FFUtils::has_audio($src),
 			};
-		} elsif(@args=m|^$M{'complex:speed'}|i) {
-			my($node)=&node(
-				'type'		=> 'complex',
-				'parent'		=> $cur,
-				'complex:speed'=> [@args],
-			);
-
-			push(@{$cur->{'tree'}}, $node);
-			$cur=$node;
-			#Filters aren't applied here, forcing them down to the child
 		} elsif(@args=m|^$M{'complex:fade'}|i) {
 			my($node)=&node(
-				'type'		=> 'complex',
-				'parent'		=> $cur,
-				'complex:fade'	=> [@args],
+				'type'			=> 'complex',
+				'parent'			=> $cur,
+				'complex:fade'		=> [ @args ],
 			);
 
 			if($args[0]=~m/out/i) {
@@ -1688,9 +1707,9 @@ sub parse {
 			#Filters aren't applied here, forcing them down to the child
 		} elsif(@args=m|^$M{'complex:blur'}|i) {
 			my($node)=&node(
-				'type'		=> 'complex',
-				'parent'		=> $cur,
-				'complex:blur'	=> [@args],
+				'type'			=> 'complex',
+				'parent'			=> $cur,
+				'complex:blur'		=> [ @args ],
 			);
 
 			if($args[0]=~m/out/i) {
@@ -1703,71 +1722,86 @@ sub parse {
 			}
 
 			#Filters aren't applied here, forcing them down to the child
-		} elsif(m|^/([\d.]*)/?([a-zA-Z]*)|) {	#Binary operator
+		} elsif(@args=m|^$M{'complex:transition'}|i) {	#Binary operator
 			my($last)=pop(@{$cur->{'tree'}}) ||
 				&err(7, 'Cannot transition from nothing.');
 			my($node)=&node(
-				'type'		=> 'complex',
-				'length'		=> -($1 || $ARG{'transition'}),
+				'type'			=> 'complex',
+				'length'			=> -($args[0] || $ARG{'transition'}),
 
 				%filt,
 				
 				'complex:transition'	=> [
-								$1 || $ARG{'transition'},
-								$2 || $ARG{'transition-type'},
+								$args[0] || $ARG{'transition'},
+								$args[1] || $ARG{'transition-type'},
 							],
 			);
 
 			$cur=&insert_branch($last => $node);
 
 			%filt=();
-		} elsif(m|%/?(.*)|) {				#Binary operator
+		} elsif(@args=m|^$M{'complex:overlay'}|i) {	#Binary operator
 			my($last)=pop(@{$cur->{'tree'}}) ||
 				&err(7, 'Cannot overlay nothing.');
 			my($node)=&node(
-				'type'		=> 'complex',
-				'tree'		=> [],
-				'timer'		=> 'first',
+				'type'			=> 'complex',
+				'tree'			=> [],
+				'timer'			=> 'first',
 
 				%filt,
 
-				'complex:overlay'	=> [ $1 || $ARG{'overlay'} ],
+				'complex:overlay'	=> [ $args[0] || $ARG{'overlay'} ],
 			);
 
 			$cur=&insert_branch($last => $node);
 
 			%filt=();
-		} elsif(m|{/?([hvca]?)|i) {
-			my($type)=lc($1);
+		} elsif(@args=m|^$M{'group:aoverlay'}|i) {
 			my($node)=&node(
-				'type'		=> 'group',
-				'parent'		=> $cur,
+				'type'			=> 'group',
+				'parent'			=> $cur,
+				'merge'			=> 'a',
+				'timer'			=> 'first',
+				'group:aoverlay'	=> [],
 
 				%filt,
 			);
-
-			if($type eq 'h') {
-				$node->{'merge'}='h';
-				$node->{'timer'}='shortest';
-				$node->{'complex:stack'}=['h'];
-			} elsif($type eq 'v') {
-				$node->{'merge'}='v';
-				$node->{'timer'}='shortest';
-				$node->{'complex:stack'}=['v'];
-			} elsif($type eq 'a') {
-				$node->{'merge'}='a';
-				$node->{'timer'}='first';
-				$node->{'complex:aoverlay'}=[];
-			} else {
-				$node->{'merge'}='c';
-				$node->{'complex:concat'}=[];
-			}
 
 			push(@{$cur->{'tree'}}, $node);
 			$cur=$node;
 
 			%filt=();
-		} elsif(m|}|i) {					 #pop out of group
+		} elsif(@args=m|^$M{'group:stack'}|i) {
+			my($type)=lc($args[0]);
+			my($node)=&node(
+				'type'			=> 'group',
+				'parent'			=> $cur,
+				'merge'			=> $type,
+				'timer'			=> 'shortest',
+				'group:stack'		=> [ $type ],
+
+				%filt,
+			);
+
+			push(@{$cur->{'tree'}}, $node);
+			$cur=$node;
+
+			%filt=();
+		} elsif(@args=m|^$M{'group:concat'}|i) {
+			my($node)=&node(
+				'type'			=> 'group',
+				'parent'			=> $cur,
+				'merge'			=> 'c',
+				'group:concat'		=> [],
+
+				%filt,
+			);
+
+			push(@{$cur->{'tree'}}, $node);
+			$cur=$node;
+
+			%filt=();
+		} elsif(m|^}|i) {					 #pop out of group
 			unless($cur->{'type'} eq 'group') {
 				&err(4, "Syntax error closing a group that doesn't exist.");
 			}
@@ -1779,6 +1813,9 @@ sub parse {
 			#Place the first video file first to help compute length:
 			if($cur->{'merge'} eq 'a') {
 				for(my $i=0; $i<@{$cur->{'tree'}}; $i++) {
+					if($cur->{'tree'}[$i]{'complex:audio'}) {
+						next;
+					}
 					if($cur->{'tree'}[$i]{'type'} eq 'complex') {
 						unshift(@{$cur->{'tree'}},
 							splice(@{$cur->{'tree'}}, $i, 1));
@@ -1808,12 +1845,12 @@ sub parse {
 			my($start)=FFUtils::time2secs($1);
 			my($end)=defined($2)?FFUtils::time2secs($2):$SOURCES{$src}{'length'};
 			my($node)=&node(
-				'type'		=> 'clip',
-				'parent'		=> $cur,
-				'file'		=> $src,
-				'start'		=> $start,
-				'end'		=> $end,
-				'length'		=> $end-$start,
+				'type'			=> 'clip',
+				'parent'			=> $cur,
+				'file'			=> $src,
+				'start'			=> $start,
+				'end'			=> $end,
+				'length'			=> $end-$start,
 
 				%filt,
 			);
@@ -1866,16 +1903,31 @@ sub parse {
 		} else {
 			my($found)=0;
 
+			foreach my $complex (grep(m/^complex:/, @ORDER)) {
+				if(@args=m|^$M{$complex}|i) {
+					my($node)=&node(
+						'type'		=> 'complex',
+						'parent'		=> $cur,
+						$complex		=> [ @args ],
+					);
+
+					push(@{$cur->{'tree'}}, $node);
+					$cur=$node;
+
+					$found=1;
+				}
+			}
+
 			foreach my $simple (grep(m/^simple:/, @ORDER)) {
 				if(@args=m|^$M{$simple}|i) {
-					push(@{$filt{$simple}}, [@args]);
+					push(@{$filt{$simple}}, [ @args ]);
 					$found=1;
 				}
 			}
 
 			foreach my $user (grep(m/^user:/, @ORDER)) {
 				if(m|^$UM{$user}/?(.*)$|) {
-					push(@{$filt{$user}}, [split(m|/|, $1)]);
+					push(@{$filt{$user}}, [ split(m|/|, $1) ]);
 					$found=1;
 				}
 			}
@@ -1886,6 +1938,13 @@ sub parse {
 		}
 	}
 
+	print $cur->{'type'}, "\n";
+	if($cur->{'type'} eq 'group') {
+		&err(4, 'A Matching group parenthesis is missing');
+	}
+	if($cur->{'type'} ne 'root') {
+		&err(100, "Unknown error: the tree didn't end up back at the root");
+	}
 	if(%filt) {
 		&err(4, 'Filter tokens are missing a clip:', keys(%filt));
 	}
@@ -2350,7 +2409,7 @@ An error was made in specifying overlay parameters.
 
 =item Z<>9
 
-An undefined stacking parameter was sent to complex:stack
+An undefined stacking parameter was sent to group:stack
 
 =item Z<>10
 
@@ -2360,6 +2419,10 @@ A speed change parameter was entered out of the allowed range.
 
 A request was made to make a transition, fade, etc. that would start or
 end beyond the actual length of the clip.
+
+=item Z<>100
+
+An unknown error occured which caused the tree structure to be invalid.
 
 =back
 
