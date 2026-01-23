@@ -140,6 +140,8 @@ values of C<string> are accepted:
 
 =item examples - Print B<clips> examples
 
+=item fonts    - If your system has Fontconfig installed, list available fonts
+
 =back
 
 =item -n or -dry-run
@@ -341,7 +343,12 @@ sub fmt {
 	my($out)=undef;
 
 	if($macro) {
-		1 while($fmt=~s/(?<!#)#((\w)|{(\w+)})/$macro->{$2||$3}/g);
+		my($loop)=0;
+		while($fmt=~s/(?<!#)#((\w)|{(\w+)})/$macro->{$2||$3}/g) {
+			if($loop++ > 100) {
+				&err(101, 'Macro expansion loop detected in ', $fmt);
+			}
+		}
 		s/##/#/g;
 	}
 
@@ -367,36 +374,51 @@ sub copykeys {
 	}
 }
 
+=head2 Fonts
+
+There is support for fonts if Fontconfig is installed.  This is very
+Linux specific for now, but it would work anywhere that there is
+Fontconfig.  If not, your font requests are passed directly onto
+L<ffmpeg(1)> as-is, and so as long as your request is understood
+there, you are good to go.  If Fontconfig is available, it is used
+to find your font and pass on the correct font by filename to
+L<ffmpeg(1)> greatly increasing the chances that you get what you want.
+You can use the C<-print=fonts> command-line option to see a list
+of fonts known by Fontconfig.  And, take heed that font names and
+styles are way, way, way to picky; if one font uses C<ExtraBold>
+and another uses C<Extra Bold>, then each one has to be written
+out exactly right with no forgivness for extra or missing spaces.
+
+When using the B<clips> Fontconfig interface, font names and font
+styles should be seperated using a hyphan C<-> character (C</>, C<:>,
+C<;>, and C<,> are also accepted).  So, for
+example, C<Open Sans Light/Italic> uses a font which is really
+called C<Open Sans Light> with the addition of the C<Italic> style,
+where as a similar looking font would be C<Noto Sans/Light Italic>
+because the font is named C<Noto Sans> and the Style is C<Light Italic>.
+And, if that weren't bad engough, C<B&H Lucida> is a font name, but
+C<Sans Italic> is the style.
+The inconsistency in fonts is enough to make me pull out the rest of my
+hair.
+
+=cut
+
+
 #This is kinda Linux specific, but it will fail through transparently
 #if `fc-match` doesn't exist.  We could add more OS support, though.
-my(@fontstyle)=qw(
-	Roman Sans Book Italic Oblique SemiCondensed Condensed Demi
-);
-my(@fontweight)=qw(
-	ExtraLight Thin Light Regular Medium SemiBold Bold ExtraBold Black
-);
-sub findfont {
-	my($font)=join(' ', @_);
+sub find_font {
+	my($font)=join('/', @_);
 	my(@fcmatch)=('fc-match', '-f', '%{file}');
-	my($style)=join('|', @fontstyle);
-	my($weight)=join('|', @fontweight);
-	my(@style, @weight, @query);
 	my($find);
 
 	return($font, undef) if(-r $font);
 
-	s/(italic)s/$1/i;
-
-	while($font=~s/\s*((\b($style)\b\s?)+)//i) {
-		push(@style, $1);
+	if($font=~m|^\s*(.*?)\s*[/:;,-]\s*(.*?)\s*$|) {
+		push(@query, "$1");
+		push(@query, "style=$2");
+	} else {
+		push(@query, $font);
 	}
-	while($font=~s/\s*((\b($weight)\b\s?)+)//i) {
-		push(@weight, $1);
-	}
-	$font=~s/^\s+//; $font=~s/\s+$//;
-	push(@query, "$font");
-	push(@query, "style=@style") if(@style);
-	push(@query, "weight=@weight") if(@weight);
 
 	push(@fcmatch, "'".join(':', @query)."'");
 	$find=`@fcmatch`;
@@ -407,6 +429,54 @@ sub findfont {
 	}
 
 	return(undef, $font);
+}
+
+sub print_fonts {
+	my(@fcmatch)=('fc-list', '-f', '%{family[0]};%{style[0]}\n');
+	my($list)=IO::Handle->new;
+	my(%fonts)=();
+	my($font, $style, $lang, @styles);
+	my($fre, $sre)=('.', '.');
+	local($_);
+
+	if($ENV{'LANG'}=~m/^(\w\w)_/) {
+		$lang=&fmt(':lang=%s', $1);
+	} else {
+		$lang=&fmt(':lang=%s', 'en');
+	}
+
+	open($list, '-|', @fcmatch, $lang);
+	while(<$list>) {
+		chomp;
+		($font, $style)=split(m/;/);
+		if($style=~m/^($match)/i) {
+			$style=~s/^Regular$//;
+			$fonts{$font}{$style}=1;
+		}
+	}
+	close($list);
+
+	if($ARG{'font'}) {
+		if($ARG{'font'}=~m|^\s*(.*?)\s*[/:;,-]\s*(.*?)\s*$|) {
+			$fre=$1;
+			$sre=$2;
+		} else {
+			$fre=$ARG{'font'};
+		}
+	}
+
+	print "Font list:\n";
+	foreach my $item (sort(keys(%fonts))) {
+		next unless($item=~m/$fre/i);
+
+		@styles=sort(grep(m/$sre/i, keys(%{$fonts{$item}})));
+
+		while(@styles) {
+			shift(@styles) unless($styles[0]);
+			print &fmt("%-30s - %s\n",
+				$item, join(', ', splice(@styles, 0, 3)));
+		}
+	}
 }
 
 =head1 DESCRIPTION
@@ -633,7 +703,7 @@ $F{'simple:video:text'}=sub {
 	);
 
 	if($ARG{'font'}) {
-		($params{'fontfile'}, $params{'font'})=&findfont($ARG{'font'});
+		($params{'fontfile'}, $params{'font'})=&find_font($ARG{'font'});
 	}
 
 	foreach(split(m|(?<!\\)/|, $args)) {
@@ -674,7 +744,7 @@ $F{'simple:video:text'}=sub {
 	}
 
 	foreach my $key (keys(%params)) {
-		$drawtext.="$key='$params{$key}':";
+		$drawtext.="$key='$params{$key}':" if($key && $params{$key});
 	}
 	$text=~s|\\/|/|g;
 	$drawtext.=sprintf("text='%s'", $text);
@@ -1200,14 +1270,57 @@ $F{'complex:overlay'}=sub {
 	return(@overlay);
 };
 
-=item {[/<h|v|c|a>] <...> }
+=item {[/c] <...> }
 
-Create grouped segments.  Use this syntax to combine multiple files by
-either stacking them horizontally with C<hstack>, vertically with C<vstack>,
-in serial with C<concat>, or for audio overlay with C<amix>.
-Note that C<concat> is the default.  Audio merge uses the first video
-stream found in the group for video, and merges audio from all members
-of the group.
+Braces C<{> and C<}> can be used to create Grouped segments.  This is
+useful if you want to apply and combine a series of clips into on,
+then execute a filter (e.g. change volume, flip, crop, etc.) against
+the combination of that series.
+
+The default action to commit against a group is to concatenate each clip
+serially.  Optionally, you can provide a C<c> option (e.g. C<{/c> ) to
+the brace, but this is the default action and unnecessary.
+
+=cut
+
+$M{'group:concat'}='{/?c?';
+$F{'group:concat'}=sub {
+	my($node)=@_;
+	my($count)=0;
+	my(@inputs)=();
+	my(@concat)=();
+
+	&copykeys($node->{'tree'}[0] => $node, 'width', 'height', 'fps');
+
+	foreach my $child (@{$node->{'tree'}}) {
+		push(@inputs, $child->{'video'}, $child->{'audio'});
+		$count++;
+	}
+
+	if($count==1) {
+		&copykeys($node->{'tree'}[0] => $node, 'video', 'audio', 'fps');
+	} else {
+		($node->{'video'}, $node->{'audio'})=&next_labels($node);
+
+		push(@concat, &fmt('#{Is}concat=n=#{N}:v=#{V}:a=#{A}#{Ov}#{Oa}', {
+				'Is'	=> join('', @inputs),
+				'N'	=> $count,
+				'V'	=> 1,
+				'A'	=> 1,
+				'Ov'	=> $node->{'video'},
+				'Oa'	=> $node->{'audio'},
+			}));
+	}
+
+	return(@concat);
+};
+
+=item {[/]<h|v> <...> }
+
+Create grouped segments stacked in a parallel fashion.  Use this syntax
+to combine multiple files by either stacking them horizontally with C<hstack>,
+vertically with C<vstack>.  All operations outside the braces will be applied
+to the combined video against it's new resolution.
 
 Stack notes:
 the duration of the combination is based on the shortest sub entry.
@@ -1260,37 +1373,30 @@ $F{'group:stack'}=sub {
 	return(@stack);
 };
 
-$M{'group:concat'}='{/?c?';
-$F{'group:concat'}=sub {
-	my($node)=@_;
-	my($count)=0;
-	my(@inputs)=();
-	my(@concat)=();
+=item {[/]<a> <...> }
 
-	&copykeys($node->{'tree'}[0] => $node, 'width', 'height', 'fps');
+Create a group which has one video file (if multiple, the first one is
+used) and additional audio files.  The audio files are overlayed together
+with the audio track from the video to produce a new video file with
+multiple audio tracks.  The audio tracks are integrated together
+using the L<ffmpeg-filters(1)> C<amix> filter and the length of the
+segment will be the length of the video clip.  If any audio files are
+shorter, they will end early and if they are longer, they will be clipped
+to length.
 
-	foreach my $child (@{$node->{'tree'}}) {
-		push(@inputs, $child->{'video'}, $child->{'audio'});
-		$count++;
-	}
+If C<volume>, C<denoise>, etc. filters need to be applied specificly to
+input audio clips, perform those actions by placing the tokens directly
+before the clip token.  This allows for easy and specific adjustment.  Any
+audio filters which should be applied to the full, resulting audio tracks
+should be placed outside the grouping braces.
 
-	if($count==1) {
-		&copykeys($node->{'tree'}[0] => $node, 'video', 'audio', 'fps');
-	} else {
-		($node->{'video'}, $node->{'audio'})=&next_labels($node);
+Note, to not confuse B<clips> it is recommended to place an C<audio> token
+before any video files you wish to be used for audio only, ensuring
+B<clips> knows to consider them audio tracks and not accidentially use
+them as the video source.  The first video track found will be the one
+used as the video track.
 
-		push(@concat, &fmt('#{Is}concat=n=#{N}:v=#{V}:a=#{A}#{Ov}#{Oa}', {
-				'Is'	=> join('', @inputs),
-				'N'	=> $count,
-				'V'	=> 1,
-				'A'	=> 1,
-				'Ov'	=> $node->{'video'},
-				'Oa'	=> $node->{'audio'},
-			}));
-	}
-
-	return(@concat);
-};
+=cut
 
 $M{'group:aoverlay'}='{/?a';
 $F{'group:aoverlay'}=sub {
@@ -1325,6 +1431,9 @@ produce a single stream as output.  Look for the term "simple filtergraph"
 in the L<ffmpeg(1)> manual for more information.
 
 This filter runs after other video or audio simple filtergraphs.
+
+Note, if you use this token often, consider using a L<UserFile> instead
+(see below).
 
 =cut
 
@@ -1938,7 +2047,6 @@ sub parse {
 		}
 	}
 
-	print $cur->{'type'}, "\n";
 	if($cur->{'type'} eq 'group') {
 		&err(4, 'A Matching group parenthesis is missing');
 	}
@@ -2141,6 +2249,11 @@ if($ARG{'print'}=~m/transition/i || $ARG{'debug'}>4) {
 	} else {
 		print "\n";
 	}
+}
+
+if($ARG{'print'}=~m/font/i) {
+	&print_fonts;
+	exit(0);
 }
 
 $ROOT=&parse(@ARGV);
@@ -2423,6 +2536,11 @@ end beyond the actual length of the clip.
 =item Z<>100
 
 An unknown error occured which caused the tree structure to be invalid.
+
+=item Z<>101
+
+A Macro expansion sent undefined.  This is most likely a programmers
+error; however, it could possibly be the result of a user defined filter.
 
 =back
 
