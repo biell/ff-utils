@@ -85,8 +85,10 @@ overall output resolution.  You can use C<:> or C<x> as the delimiter.
 
 When drawing text use C<font>.  This could be any font specification
 understood by L<ffmpeg(1)> and the L<ffmpeg-filters(1)> C<drawtext>
-filter.  What works best is to specify a path to a TureType (TTF) font
-file.  However, it can use supported names also (e.g. Sans).
+filter.  See below under L<Fonts> for more information on how B<clips>
+searches for fonts.  If that interface is unavailable (it uses Fontconfig)
+what works best is to specify a path to a TureType (TTF) font
+file.
 
 =item -R <#> or -rate=<#>
 
@@ -376,106 +378,139 @@ sub copykeys {
 
 =head2 Fonts
 
-There is support for fonts if Fontconfig is installed.  This is very
+There is support for B<clips> to help you find fonts if Fontconfig is
+installed.  Otherwise, font information is just passed along to
+L<ffmpeg(1)> to do it's best.  This is very
 Linux specific for now, but it would work anywhere that there is
-Fontconfig.  If not, your font requests are passed directly onto
-L<ffmpeg(1)> as-is, and so as long as your request is understood
-there, you are good to go.  If Fontconfig is available, it is used
-to find your font and pass on the correct font by filename to
-L<ffmpeg(1)> greatly increasing the chances that you get what you want.
-You can use the C<-print=fonts> command-line option to see a list
-of fonts known by Fontconfig.  And, take heed that font names and
-styles are way, way, way to picky; if one font uses C<ExtraBold>
-and another uses C<Extra Bold>, then each one has to be written
-out exactly right with no forgivness for extra or missing spaces.
+Fontconfig.  Use a combination of C<-print=fonts> and the C<-F>
+command-line options to search for and select fonts.  Once you have
+the search narrowed to the font you want, you can remove the 
+C<-print=fonts> argument and should get what you want.  You can
+always still use the C<-n> or C<-d> arguments to see the L<ffmpeg(1)>
+command-line for verification.
 
-When using the B<clips> Fontconfig interface, font names and font
-styles should be seperated using a hyphan C<-> character (C</>, C<:>,
-C<;>, and C<,> are also accepted).  So, for
-example, C<Open Sans Light/Italic> uses a font which is really
-called C<Open Sans Light> with the addition of the C<Italic> style,
-where as a similar looking font would be C<Noto Sans/Light Italic>
-because the font is named C<Noto Sans> and the Style is C<Light Italic>.
-And, if that weren't bad engough, C<B&H Lucida> is a font name, but
-C<Sans Italic> is the style.
-The inconsistency in fonts is enough to make me pull out the rest of my
-hair.
+This interface is very nearly the exact opposite of the Fontconfig
+methodology.  So, shh, don't tell them about it.  When you use the
+C<-F> command-line argument to specify a font, B<clips> will step
+through the font name word by word, limiting the font choices
+as it goes.  If it ends with a single font, then it is used.  If
+multiple matching fonts are found, then the shortest match is
+used.  For example, using the arguments C<-F 'Sans Italic'> will
+catch both Font C<Noto Sans> in Style C<Italic> and font C<B&H Lucida>
+in style C<Sans Italic>.  Finally, if the last word of your font is
+a language specifier (e.g. C<en>) then only fonts supporting that
+language will be kept.  So, using C<-print=fonts -F he> will actually
+list all fonts supporting Hebrew.
 
 =cut
 
-
-#This is kinda Linux specific, but it will fail through transparently
-#if `fc-match` doesn't exist.  We could add more OS support, though.
-sub find_font {
-	my($font)=join('/', @_);
-	my(@fcmatch)=('fc-match', '-f', '%{file}');
-	my($find);
-
-	return($font, undef) if(-r $font);
-
-	if($font=~m|^\s*(.*?)\s*[/:;,-]\s*(.*?)\s*$|) {
-		push(@query, "$1");
-		push(@query, "style=$2");
-	} else {
-		push(@query, $font);
-	}
-
-	push(@fcmatch, "'".join(':', @query)."'");
-	$find=`@fcmatch`;
-	print join(' ', @fcmatch), "\nFound: ", $find, "\n" if($ARG{'debug'});
-	
-	if(-r $find) {
-		return($find, undef);
-	}
-
-	return(undef, $font);
-}
-
-sub print_fonts {
-	my(@fcmatch)=('fc-list', '-f', '%{family[0]};%{style[0]}\n');
+sub fc_search {
+	my(@search)=split(m/\s+/, join(' ', @_));
+	my(@fclist)=('fc-list', '-f', '%{family[0]};%{style[0]};%{file}\n');
 	my($list)=IO::Handle->new;
 	my(%fonts)=();
-	my($font, $style, $lang, @styles);
-	my($fre, $sre)=('.', '.');
-	local($_);
+	my(%match)=();
+	my(@font, $name, $lang_re);
 
-	if($ENV{'LANG'}=~m/^(\w\w)_/) {
-		$lang=&fmt(':lang=%s', $1);
-	} else {
-		$lang=&fmt(':lang=%s', 'en');
+	$lang_re=join('|',
+		List::Util::uniq(sort(
+			split(m/\|/, `fc-list -f '%{lang}'`)
+		))
+	);
+
+	if($search[-1]=~m/^($lang_re)$/i) {
+		push(@fclist, &fmt(':lang=%s', pop(@search)));
 	}
 
-	open($list, '-|', @fcmatch, $lang);
+	open($list, '-|', @fclist);
 	while(<$list>) {
 		chomp;
-		($font, $style)=split(m/;/);
-		if($style=~m/^($match)/i) {
-			$style=~s/^Regular$//;
-			$fonts{$font}{$style}=1;
-		}
+		@font=split(m/;/);
+
+		$fonts{join(' ', @font[0,1])}=[@font];
 	}
 	close($list);
 
-	if($ARG{'font'}) {
-		if($ARG{'font'}=~m|^\s*(.*?)\s*[/:;,-]\s*(.*?)\s*$|) {
-			$fre=$1;
-			$sre=$2;
+	if($?) {
+		if($ARG{'debug'}>1) {
+			print "Fontconfig is not installed or not working\n";
+		}
+		return();
+	}
+
+	if(@search) {
+		foreach my $term (@search) {
+			foreach $name (keys(%fonts)) {
+				delete($fonts{$name}) unless($name=~m/$term/i);
+			}
+
+			if(%fonts) {
+				%match=%fonts;
+			} else {
+				#That term failed, move on to the next one
+				%fonts=%match;
+			}
+		}
+
+		return(%match);
+	} else {
+		return(%fonts);
+	}
+
+}
+
+sub find_font {
+	my($font)=join(' ', @_);
+	my(@matches);
+	my(%fonts);
+
+	if(-r $font) {
+		return($font, undef);
+	} elsif($font) {
+		%fonts=&fc_search($font);
+
+		if(%fonts) {
+			@matches=sort({ length($a) <=> length($b) } keys(%fonts));
+			return($fonts{$matches[0]}[2], $matches[0]);
 		} else {
-			$fre=$ARG{'font'};
+			return(undef, $font);
+		}
+	} else {
+		return(undef, 'Sans');
+	}
+}
+
+sub print_fonts {
+	my(%fonts)=&fc_search(@_);
+	my(%print)=();
+
+	print "Font list:\n";
+
+	unless(%fonts) {
+		print " None found for search: @_\n";
+		return();
+	}
+
+	foreach my $font (values(%fonts)) {
+		$print{$font->[0]}//=[];
+		unless($font->[1]=~m/regular/i) {
+			push(@{$print{$font->[0]}}, $font->[1]);
 		}
 	}
 
-	print "Font list:\n";
-	foreach my $item (sort(keys(%fonts))) {
-		next unless($item=~m/$fre/i);
+	foreach my $font (sort(keys(%print))) {
+		my(@styles)=sort( { length($a) <=> length($b) } @{$print{$font}});
+		my($i)=$#styles;
 
-		@styles=sort(grep(m/$sre/i, keys(%{$fonts{$item}})));
-
-		while(@styles) {
-			shift(@styles) unless($styles[0]);
-			print &fmt("%-30s - %s\n",
-				$item, join(', ', splice(@styles, 0, 3)));
-		}
+		do {
+			if($i==0 || length(join(', ', @styles[0..$i])) < 48) {
+				print &fmt(" %-30s %s\n",
+					$font, join(', ', splice(@styles, 0, $i+1)));
+				$i=$#styles;
+			} else {
+				$i--;
+			}
+		} while(@styles);
 	}
 }
 
@@ -2252,7 +2287,7 @@ if($ARG{'print'}=~m/transition/i || $ARG{'debug'}>4) {
 }
 
 if($ARG{'print'}=~m/font/i) {
-	&print_fonts;
+	&print_fonts($ARG{'font'});
 	exit(0);
 }
 
