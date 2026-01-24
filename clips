@@ -979,19 +979,19 @@ $F{'complex:blur'}=sub {
 		'B'	=> -0.15,
 
 		'Si'	=> 0,
-		'Ri'	=> "pow(T-#{S}\\,2)/pow(#{D}\\,2)",
-		'Ai'	=> "(#{Ri})*A+(1-#{Ri})*B",
-		'Ei'	=> "lte(t\\,#{D})",
+		'Ri'	=> 'pow(T-#{Si}\,2)/pow(#{D}\,2)',
+		'Ai'	=> '(#{Ri})*A+(1-#{Ri})*B',
+		'Ei'	=> 'lte(t\,#{D})',
 
 		'So'	=> $node->{'length'}-$length,
-		'Ro'	=> "sqrt((T-#{S})/#{D})",
-		'Ao'	=> "(1-#{Ro})*A+(#{Ro})*B",
-		'Eo'	=> "gte(t\\,#{S})",
+		'Ro'	=> 'clip(sqrt((T-#{So})/(#{D}))\,0\,1)',
+		'Ao'	=> '(1-#{Ro})*A+(#{Ro})*B',
+		'Eo'	=> 'gte(t\,#{So})',
 
-		'S'	=> $ifin ? "#{Si}" : "#{So}",
-		'A'	=> $ifin ? "#{Ai}" : "#{Ao}",
+		'S'	=> $ifin ? '#{Si}' : '#{So}',
+		'A'	=> $ifin ? '#{Ai}' : '#{Ao}',
 
-		'E'	=> $ifin ? "enable=#{Ei}" : "enable=#{Eo}",
+		'E'	=> $ifin ? 'enable=#{Ei}' : 'enable=#{Eo}',
 		'Ob'	=> &next_labels($node, 'video'),
 		'Ov'	=> $node->{'video'},
 		'Oa'	=> $node->{'audio'},
