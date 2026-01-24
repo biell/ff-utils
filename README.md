@@ -169,3 +169,8 @@ Examples
           src3.mp4 0-10 /10/L src4.mp4 0-10 /10/L src1.mp4 10-20 /10/L \
           src2.mp4 10-20 /10/L src3.mp4 0-20 /10/L src4.mp4 10-15 
 
+* Print out all Sans fonts with a Bold and Italic style
+
+        clips -print=fonts -F 'sans bold italic'
+
+
