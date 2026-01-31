@@ -365,7 +365,7 @@ sub fmt {
 
 sub even {
 	my($i)=int($_[0]);
-	return(i + $i%2);
+	return($i + $i%2);
 }
 
 sub copykeys {
@@ -853,8 +853,8 @@ $F{'simple:video:scale'}=sub {
 		}
 
 		return(&fmt($scale, $node->{'width'}, $node->{'height'}));
-	} elsif($node->{'length'}!=$w || $node->{'height'}!=$h) {
-		$node->{'length'}=$w;
+	} elsif($node->{'width'}!=$w || $node->{'height'}!=$h) {
+		$node->{'width'}=$w;
 		$node->{'height'}=$h;
 		return(
 			&fmt($scale, $w, $h),
