@@ -6,10 +6,12 @@ our($VERSION)='1.0';
 
 use IO::Handle;
 use List::Util;
+use JSON;
 
 my(@FFMPEG)=qw(ffmpeg -y -ac 2 -stats_period);
 my($PERIOD)=6;
 my(@FFLOG)=qw(-loglevel fatal -progress -);
+my(%DB)=();
 
 our($DEBUG)=0;
 our($NORMALIZE)='loudnorm,dynaudnorm,highpass=f=600';
@@ -44,51 +46,82 @@ sub secs2time {
 	return($time);
 }
 
+sub get_info {
+	my($file)=@_;
+	my($probe)=IO::Handle->new;
+	my(@ffprobe)=qw(ffprobe -of json -v quiet -show_format -show_streams);
+	my(@fractions)=qw(r_frame_rate avg_frame_rate time_base);
+	my($info);
+	local($/)=undef;
+	
+	return(undef) unless(-r $file);
+
+	unless($DB{$file}) {
+		open($probe, '-|', @ffprobe, '-select_streams', 'v', $file);
+		$info=eval {JSON->new->decode(join('', <$probe>))} || {};
+		$DB{$file}{'video'}=$info->{'streams'}[0];
+		$DB{$file}{'format'}=$info->{'format'};
+		close($probe);
+
+		open($probe, '-|', @ffprobe, '-select_streams', 'a', $file);
+		$info=eval {JSON->new->decode(join('', <$probe>))} || {};
+		$DB{$file}{'audio'}=$info->{'streams'}[0];
+		$DB{$file}{'format'}||=$info->{'format'};
+		close($probe);
+
+		foreach my $type (keys(%{$DB{$file}})) {
+			for my $key (@fractions) {
+				if($DB{$file}{$type}{$key}=~m|([\d.]+)/([\d.]+)|) {
+					$DB{$file}{$type}{$key}=$1/$2 if($2);
+				}
+			}
+		}
+	}
+
+	return($DB{$file});
+}
+
 sub probe {
 	my($file, $key, $value)=@_;
 	my($probe)=IO::Handle->new;
-	my(@ffprobe)=qw(ffprobe -show_streams -v quiet);
-	my($output)=undef;
+	my(@types)=qw(format video audio);
+	my($db)=&get_info($file);
 
-	$value='.+' unless($value);
+	if($key=~m/^\s*(\w+)\W+(\w+)\s*$/) {
+		@types=($1);
+		$key=$2;
+	}
 
-	return(undef) unless(-r $file);
-
-	open($probe, '-|', @ffprobe, $file);
-	while(<$probe>) {
-		if(m/^$key=($value)/) {
-			$output=$1;
-			last;
+	foreach my $type (@types) {
+		if(exists($db->{$type}{$key})) {
+			if(defined($value)) {
+				if($db->{$type}{$key}=~m/$value/i) {
+					return($db->{$type}{$key});
+				}
+			} else {
+				return($db->{$type}{$key});
+			}
 		}
 	}
-	close($probe);
 
-	if($output=~m|([\d.]+)/([\d.]+)|) {
-		$output=$1/$2 if($2);
-	}
-	return($output);
+	return(undef);
 }
 
 sub has_video {
-	my($file)=@_;
-	my($probe)=IO::Handle->new;
-	my(@ffprobe)=qw(ffprobe -show_streams -v quiet -select_streams v);
-	my($video)=undef;
+	my($video)=&get_info(@_)->{'video'};
 
-	if(-r $file) {
-		open($probe, '-|', @ffprobe, $file);
-		while(<$probe>) {
-			$video=1 if(m/^avg_frame_rate=[1-9]/m);
-			$video=1 if(m/^nal_length_size=\d/m);
-		}
-		close($probe);
-	}
-
-	return($video);
+	return(
+		$video &&
+		$video->{'width'} &&
+		$video->{'height'} &&
+		$video->{'avg_frame_rate'}
+	);
 }
 
 sub has_audio {
-	return(&probe($_[0], 'codec_type', 'audio') eq 'audio');
+	my($audio)=&get_info(@_)->{'audio'};
+
+	return( $audio && $audio->{'codec_type'} eq 'audio' );
 }
 
 sub shortest {
@@ -96,26 +129,25 @@ sub shortest {
 }
 
 sub duration {
-	my(@tags)=qw(duration TAG:DURATION);
-	my($duration);
+	my($duration)=&probe($_[0], 'duration');
 
-	foreach my $tag (@tags) {
-		$duration=&probe($_[0], $tag);
-		return(&time2secs($duration)) if($duration=~m/^[\d:.]+$/);
+	if($duration=~m/^[\d:.]+$/) {
+		return(&time2secs($duration));
+	} else {
+		return(undef);
 	}
-	return(undef);
 }
 
 sub width {
-	return(&probe($_[0], 'width'));
+	return(&probe($_[0], 'video:width'));
 }
 
 sub height {
-	return(&probe($_[0], 'height'));
+	return(&probe($_[0], 'video:height'));
 }
 
 sub framerate {
-	return(&probe($_[0], 'r_frame_rate'));
+	return(&probe($_[0], 'video:r_frame_rate'));
 }
 
 sub clamp {
