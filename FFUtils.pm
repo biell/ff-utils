@@ -8,9 +8,9 @@ use IO::Handle;
 use List::Util;
 use JSON;
 
-my(@FFMPEG)=qw(ffmpeg -y -ac 2 -stats_period);
+my(@FFMPEG)=qw(ffmpeg -y -ac 2 -progress - -stats_period);
 my($PERIOD)=6;
-my(@FFLOG)=qw(-loglevel fatal -progress -);
+my(@FFLOG)=qw(-loglevel error);
 my(%DB)=();
 
 our($DEBUG)=0;

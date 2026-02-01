@@ -829,6 +829,21 @@ $F{'simple:video:crop'}=sub {
 Scale the next video to the default height and width, or what is specified
 with the token.
 
+Simple right?  Well, C<scale> is far from it.  If there isn't a geometry
+specified and there is no command-line argument resolution specified, then
+C<scale> will check to see if it is called within a group, and align the
+resolution to that of the first member of the group.  Additionally, when
+inside a grouping, an implied C<scale> filter is applied to all clips which
+don't match the first video's resolution.
+
+The final thing to note about B<clips>' C<scale> token is that it respects
+the original aspect ratio, adding black bars if necessary to match the
+requested dimensions without altering the aspect ratio.  Use
+C<ffmpeg/v/scale> to call L<ffmpeg(1)>'s scale in an unintelligent way,
+or see the C<resize> configuration in the example user filter file which
+performs an exact user-specified scale operation regardless of how they
+might look different than the original.
+
 =cut
 
 $M{'simple:video:scale'}='scale/?([\dx:]*)';
@@ -837,15 +852,25 @@ $F{'simple:video:scale'}=sub {
 	my($resolution)=$_[1] || $ARG{'resolution'};
 	my($parent)=$node->{'parent'};
 	my($w, $h)=split(m/[x:]/i, $resolution);
-	my($scale)='scale=%d:%d:force_original_aspect_ratio=decrease';
+	my($scale)='scale=%d:%d:force_original_aspect_ratio=decrease:reset_sar=1';
 	my($pad)='pad=%d:%d:(ow-iw)/2:(oh-ih)/2';
-	my(@scale)=();
+
+	unless($resolution) {
+		if($parent->{'type'} eq 'group') {
+			$w=$parent->{'tree'}[0]{'width'};
+			$h=$parent->{'tree'}[0]{'height'};
+		}
+	}
 
 	if($parent && $parent->{'type'} eq 'group' && $parent->{'merge'} ne 'c') {
 		if($parent->{'merge'} eq 'h') {
+			return() if($node->{'height'}==$h);
+
 			$node->{'width'}=&even($node->{'width'}*$h/$node->{'height'});
 			$node->{'height'}=$h;
 		} elsif($parent->{'merge'} eq 'v') {
+			return() if($node->{'width'}==$w);
+
 			$node->{'height'}=&even($node->{'height'}*$w/$node->{'width'});
 			$node->{'width'}=$w;
 		} else {
@@ -861,6 +886,8 @@ $F{'simple:video:scale'}=sub {
 			&fmt($pad, $w, $h)
 		);
 	}
+
+	return();
 };
 
 =item flip[/<h|v>]
@@ -2034,6 +2061,10 @@ sub parse {
 
 			if($end > $SOURCES{$src}{'length'}) {
 				&err(3, "'$2' is past the end of $src.");
+			}
+
+			if($cur->{'type'} eq 'group' && $cur->{'merge'} ne 'a' && !$node->{'simple:video:scale'}) {
+				push(@{$node->{'simple:video:scale'}}, []);
 			}
 
 			push(@{$cur->{'tree'}}, $node);

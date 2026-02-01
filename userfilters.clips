@@ -27,6 +27,7 @@ user:audio:speech    speech/N            afftdn=nf=#{N},dialoguenhance,\
 user:audio:roadnoise roadnoise/V=2/N=-25 afftdn=nf=#{N},highpass,lowpass,\
                                          afwtdn,dialoguenhance,volume=#{V}
 
+user:video:resize    resize/R            scale=#{R}
 user:video:gamma     gamma/N=0.8         eq=gamma=#{N}
 user:video:bblur     bblur/X=5/Y=5       avgblur=sizeX=#{X}:sizeY=#{Y}
 
