@@ -27,6 +27,20 @@ clips [options] <out.mp4|-> <in1.mp4> <clip1> [...]
 
 =over 8
 
+=item -0 <file>, -1 <file>, -2 <file>, ..., -9 <file>
+
+Numbers (only 0 through 9) can take a filename as an argument to create a
+placeholder input file.  This placeholder can then be used to refer to a file.
+It is useful if you plan to alternate files a lot on your command-line.  When
+using this option, files can be referred to by their number using the
+placeholder syntax on the command-line:  C<[0]>, C<[1]>, ..., C<[9]>.  This
+will have the effect of substituting the actual filename in for that position.
+
+Note that this option and resulting syntax can be intermixed with the
+standard method of placing the filename on the command-line when it is
+to become named.  So, even though there are only 10 file name placeholders,
+using these options are not fully incompatible with complex command-lines.
+
 =item -title=<text>
 
 Set the output file's C<TITLE> metadata to C<text>.
@@ -76,10 +90,15 @@ Run an audio normalize routine on all inputs.
 
 =item -r <W>:<H> or -resolution=<W>:<H>
 
-Force the output to be specifically resolution of WxH.  This is most
-convenient if you have videos of different resolutions that you want to
+Force the inputs AND outputs to be specifically resolution of WxH.  This is
+most convenient if you have videos of different resolutions that you want to
 merge into one.  However, it can also be used if you want to change the
 overall output resolution.  You can use C<:> or C<x> as the delimiter.
+
+Note when using a horizontal or vertical group, this will scale each video
+to the desired output resolution, then scale the overall video back down
+to the desired size.  It works well as an easy button, but may produce
+unintended artifacts.
 
 =item -F <font> or -font=<font>
 
@@ -179,6 +198,16 @@ Print full manual.
 =cut
 
 my(@OPTIONS)=qw(
+	0=s
+	1=s
+	2=s
+	3=s
+	4=s
+	5=s
+	6=s
+	7=s
+	8=s
+	9=s
 	title=s
 	comment=s
 	description=s
@@ -312,16 +341,19 @@ sub treedump {
 
 	$Data::Dumper::Indent=1;
 	$Data::Dumper::Terse=1;
+	$Data::Dumper::Pair = ":  ";
+	$Data::Dumper::Quotekeys=0;
 	$Data::Dumper::Sortkeys=\&debugtreesort;
 	$tree=Dumper($ROOT);
 
 	$tree=~s/VAR1/ROOT/g;
-	$tree=~s/=> \!\!0,/=> 0,/g;
-	$tree=~s/=> \!\!1,/=> 1,/g;
+	$tree=~s/(:|=>) +\!\!([01]),/: $1,/g;
 	$tree=~s/(\n\s+)(\[.*?\s*\])/$1.&debugcollapse($2)/ges;
-	$tree=~s/(=> \[\n\s+[^}]{1,30}\n\s+\])/&debugcollapse($1)/ges;
+	$tree=~s/((:|=>) +\[\n\s+[^}]{1,30}\n\s+\])/&debugcollapse($1)/ges;
+	$tree=~s/^{/ {/;
+	$tree=~s/}$/ }/;
 
-	print $tree, "\n";
+	print "Data Structure Tree:\n", $tree, "\n\n";
 }
 
 #err just makes it simpler to print error messages and exit with a specific
@@ -621,6 +653,18 @@ Any filename specified after the output file (and you need to do this at
 least once) will mean that any clips specified after this file will come
 from it.  You can change the filename as many times as you want, and you
 can come back and repeat at filename if you wish.
+
+=item <[#]> or <[#:<a|v>]>
+
+When using the C<-0>, C<-1>, ..., C<-9> command-line arguments, this syntax
+can be used as a placeholder to reference the corresponding file name as
+C<#> with a short token like C<[1]>.  This token can be an argument by
+itself, or be bolted onto the front of a clip time specification.
+
+Optionally, you can simulate L<ffmpeg(1)> syntax and either pull out only
+the audio track (e.g. C<[0:a]>) or mute the audio track (e.g. C<[2:v]>)
+for the next clip of this file.  This shorthand only only affects the next
+clips and so should be used carefully.
 
 =item fps[/framerate]
 
@@ -1846,9 +1890,34 @@ sub parse {
 	my(%filt)=();
 	my($src)=undef;
 	my($stream)=0;
+	my(@tokens)=();
 	my(@args);
 
-	foreach(@_) {
+	foreach(@_) {			#Pre-processor
+		s/^\s+//;
+		s/\s+$//;
+
+		if(m|^}}+|) {
+			for(my $i=0; $i<length($_); $i++) {
+				push(@tokens, '}');
+			}
+		} elsif(m|^\[(\d)(:[av])?\]\s*(.*)$|i) {
+			if($ARG{$1}) {
+				push(@tokens, $ARG{$1});
+			} else {
+				&err(12, "A placeholder was used without a reference:",
+					"'[$1]' has no corresponding '-$1'");
+			}
+			push(@tokens, 'audio') if(lc($2) eq ':a');
+			push(@tokens, 'volume/0') if(lc($2) eq ':v');
+			push(@tokens, $3) if($3);
+		} else {
+			push(@tokens, $_);
+		}
+	}
+	print "Tokens:\n '", join("' '", @tokens), "'\n\n" if($ARG{'debug'}>2);
+
+	foreach(@tokens) {		#Processor
 		if(-f $_) {
 			$src=$_;
 			$SOURCES{$src}={
@@ -2012,7 +2081,9 @@ sub parse {
 				$cur=$cur->{'parent'};
 			}
 
-		} elsif(m/^([\d:.]+)-([\d:.]+)?\s*$/) {
+			redo if(s|^}}|}|);  #If someone bundles braces, make it work
+
+		} elsif(m/^([\d:.]+)-([\d:.]+)?$/) {
 			my($start)=FFUtils::time2secs($1);
 			my($end)=defined($2)?FFUtils::time2secs($2):$SOURCES{$src}{'length'};
 			my($node)=&node(
@@ -2598,6 +2669,10 @@ A speed change parameter was entered out of the allowed range.
 
 A request was made to make a transition, fade, etc. that would start or
 end beyond the actual length of the clip.
+
+=item Z<>12
+
+A reference was made to a file placeholder which does not exist.
 
 =item Z<>100
 
