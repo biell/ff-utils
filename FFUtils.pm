@@ -57,16 +57,14 @@ sub get_info {
 	return(undef) unless(-r $file);
 
 	unless($DB{$file}) {
-		open($probe, '-|', @ffprobe, '-select_streams', 'v', $file);
+		open($probe, '-|', @ffprobe, $file);
 		$info=eval {JSON->new->decode(join('', <$probe>))} || {};
-		$DB{$file}{'video'}=$info->{'streams'}[0];
-		$DB{$file}{'format'}=$info->{'format'};
-		close($probe);
 
-		open($probe, '-|', @ffprobe, '-select_streams', 'a', $file);
-		$info=eval {JSON->new->decode(join('', <$probe>))} || {};
-		$DB{$file}{'audio'}=$info->{'streams'}[0];
-		$DB{$file}{'format'}||=$info->{'format'};
+		$DB{$file}{'format'}=$info->{'format'};
+		foreach my $stream (@{$info->{'streams'}}) {
+			$DB{$file}{$stream->{'codec_type'}}=$stream;
+		}
+
 		close($probe);
 
 		foreach my $type (keys(%{$DB{$file}})) {
