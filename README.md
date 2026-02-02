@@ -163,11 +163,12 @@ Examples
 
 * Create a continuously scrolling video of 10 second clips from 4 different
   input files moving from right to left.  After the last video scrolls to
-  cover the entire window, the video ends.
+  cover the entire window, the video ends.  Use command-line placeholders
+  for the video files.
 
-        clips carousel.mp4 src1.mp4 0-10 /10/L src2.mp4 0-10 /10/L     \
-          src3.mp4 0-10 /10/L src4.mp4 0-10 /10/L src1.mp4 10-20 /10/L \
-          src2.mp4 10-20 /10/L src3.mp4 0-20 /10/L src4.mp4 10-15 
+        clips -1 src1.mp4 -2 src2.mp4 -3 src3.mp4 -4 src4.mp4 carousel.mp4 \
+          [1] 0-10 /10/L  [2] 0-10 /10/L  [3] 0-10 /10/L [4] 0-10 /10/L \
+		[1] 10-20 /10/L [2] 10-20 /10/L [3] 0-20 /10/L [4] 10-15 
 
 * Print out all Sans fonts with a Bold and Italic style
 
