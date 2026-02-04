@@ -100,6 +100,14 @@ to the desired output resolution, then scale the overall video back down
 to the desired size.  It works well as an easy button, but may produce
 unintended artifacts.
 
+=item -r:in <W>:<H> or -resolution:in=<W>:<H>
+
+Just like the previous option, but only force resolution on inputs.
+
+=item -r:out <W>:<H> or -resolution:out=<W>:<H>
+
+Just like the previous option, but only force resolution on outputs.
+
 =item -F <font> or -font=<font>
 
 When drawing text use C<font>.  This could be any font specification
@@ -218,7 +226,9 @@ my(@OPTIONS)=qw(
 	speed|speedup|tempo|s=f
 	volume|vol|v=f
 	normalize|normal|norm|N
-	resolution|res|geometry|r=s
+	res|resolution|geometry|r=s
+	rout|r-out|res-out|resolution-out=s
+	rin|r-in|res-in|resolution-in=s
 	rate|framerate|frame-rate|fps|R=f
 	font|F=s
 	audio-only|A
@@ -243,6 +253,8 @@ my(%ARG)=(
 	'volume'			=> 1,
 	'userfile'		=> $ENV{'CLIPS_USERFILE'},
 );
+
+s/^-(\w+):/-$1-/ foreach(@ARGV);	#Fixup for colons in options
 
 Getopt::Long::Configure('pass_through', 'bundling_override', 'ignore_case');
 unless(GetOptions(\%ARG, @OPTIONS)) {
@@ -278,12 +290,16 @@ my(@INPUTS)=();
 my(@FFPROGRAM)=();
 
 if($ARG{'practice'}) {
-	$ARG{'resolution'}='640:360';
+	$ARG{'res'}='640:360';
 	$ARG{'rate'}=24;
 }
 
 if($ARG{'audio-only'}) {
 	$ARG{'rate'}=0.1;
+}
+
+if($ARG{'end'}) {
+	$ARG{'end'}=FFUtils::time2secs($ARG{'end'});
 }
 
 #Developer's note for filters:
@@ -314,6 +330,8 @@ sub debugtreesort {
 		width     24
 		height    25
 		fps       26
+		vtb       27
+		atb       28
 		merge     30
 		timer     31
 		video     40
@@ -350,6 +368,8 @@ sub treedump {
 	$tree=~s/(:|=>) +\!\!([01]),/: $1,/g;
 	$tree=~s/(\n\s+)(\[.*?\s*\])/$1.&debugcollapse($2)/ges;
 	$tree=~s/((:|=>) +\[\n\s+[^}]{1,30}\n\s+\])/&debugcollapse($1)/ges;
+	$tree=~s/!!1/TRUE/g;
+	$tree=~s/!!0/FALSE/g;
 	$tree=~s/^{/ {/;
 	$tree=~s/}$/ }/;
 
@@ -676,13 +696,37 @@ defined globally via the C<-R> or C<-rate> command-line options.
 $M{'simple:video:fps'}='fps/?([\d./]*)';
 $F{'simple:video:fps'}=sub {
 	my($node, $fps)=@_;
+	my(@fps)=();
 
 	$fps||=$ARG{'rate'};
 
 	if($fps != $node->{'fps'}) {
 		$node->{'fps'}=$fps;
-		return(&fmt('fps=fps=%f,settb=AVTB', $fps));
+		push(@fps, &fmt('fps=fps=%f,settb=%s', $fps, $node->{'vtb'}));
 	}
+
+	return(@fps);
+};
+
+=item tb[/timebase]
+
+Set the timebase to a specified value, or C<AVTB> if not specified.
+
+=cut
+
+$M{'simple:video:tb'}='tb/?(.*)';
+$F{'simple:video:tb'}=sub {
+	my($node, $tb)=@_;
+	my(@tb)=();
+
+	$tb||='AVTB';
+
+	if($tb != $node->{'vtb'}) {
+		$node->{'vtb'}=$tb;
+		push(@tb, &fmt('settb=%s', $tb));
+	}
+
+	return(@tb);
 };
 
 =item text[/color][/fontsize][/duration][/position]</string>
@@ -786,7 +830,8 @@ $F{'simple:video:text'}=sub {
 	}
 
 	foreach(split(m|(?<!\\)/|, $args)) {
-		s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|$1/$2|g;
+		s|\\+/|/|g;
+		s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|($1)/($2)|g;
 
 		if(m/^(#[\da-f@]{6,8}|[a-z]+@[\d.]+|[a-z]+)$/i) {
 			$params{'fontcolor'}=$1;
@@ -796,7 +841,7 @@ $F{'simple:video:text'}=sub {
 			$params{'enable'}=&fmt('between(t,%f,%f)',
 				FFUtils::time2secs($1),
 				FFUtils::time2secs($2 // $node->{'length'}));
-		} elsif(m|^([\w()*\\/+-]+)[:x]([\w()*\\/+-]+)$|i) {
+		} elsif(m|^([\w()*/+-]+)[:x]([\w()*/+-]+)$|i) {
 			$params{'x'}=$1;
 			$params{'y'}=$2;
 
@@ -825,7 +870,6 @@ $F{'simple:video:text'}=sub {
 	foreach my $key (keys(%params)) {
 		$drawtext.="$key='$params{$key}':" if($key && $params{$key});
 	}
-	$text=~s|\\/|/|g;
 	$drawtext.=sprintf("text='%s'", $text);
 
 	return($drawtext);
@@ -843,9 +887,10 @@ and coordinates.
 
 =cut
 
-$M{'simple:video:crop'}='crop/(\d+)\D(\d+)\D([\d+-]+)\D([\d+-]+)';
+$M{'simple:video:crop'}='crop/([\d:x/+-]+)';
 $F{'simple:video:crop'}=sub {
-	my($node, $w, $h, $x, $y)=@_;
+	my($node)=shift;
+	my($w, $h, $x, $y)=split(m/:/, shift);
 
 	if($x<0) {
 		$x+=$node->{'width'}-$w;
@@ -893,7 +938,7 @@ might look different than the original.
 $M{'simple:video:scale'}='scale/?([\dx:]*)';
 $F{'simple:video:scale'}=sub {
 	my($node)=$_[0];
-	my($resolution)=$_[1] || $ARG{'resolution'};
+	my($resolution)=$_[1] || $ARG{'res'};
 	my($parent)=$node->{'parent'};
 	my($w, $h)=split(m/[x:]/i, $resolution);
 	my($scale)='scale=%d:%d:force_original_aspect_ratio=decrease:reset_sar=1';
@@ -1094,10 +1139,11 @@ $M{'complex:audio'}='audio';
 $F{'complex:audio'}=sub {
 	my($node)=@_;
 
-	&copykeys($node->{'tree'}[0] => $node, 'audio');
+	&copykeys($node->{'tree'}[0] => $node, 'audio', 'atb');
 
 	$node->{'video'}=undef;
 	$node->{'fps'}=undef;
+	$node->{'vtb'}=undef;
 	$node->{'width'}=undef;
 	$node->{'height'}=undef;
 
@@ -1158,7 +1204,7 @@ $F{'complex:speed'}=sub {
 	$node->{'video'}=$vout;
 
 	if($speed<0.5) {
-		print "Note, audio is disabled below 0.5\n";
+		print "NOTE: audio is disabled below 0.5\n";
 		#&err(10, 'Cannot specify a speed slower than 0.5');
 		$node->{'audio'}=undef;
 	} else {
@@ -1250,13 +1296,25 @@ $F{'complex:transition'}=sub {
 	my($offset)=$l->{'length'}-$time;
 	my(@fade)=();
 
-	&copykeys($l => $node, 'width', 'height', 'fps');
+	&copykeys($l => $node, 'width', 'height', 'fps', 'atb', 'vtb');
 	($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
 	$type=$TRANSITION{$type} || $type;
 
 	if($time>$l->{'length'} || $time>$r->{'length'}) {
 		&err(11, "Transition cannot be longer than the actual clip.");
+	}
+
+	if($l->{'fps'} ne $r->{'fps'} || $l->{'vtb'} ne $r->{'vtb'}) {
+		my($vr_tmp)=&next_labels($r, 'video' => 1);
+
+		push(@fade, &fmt('#{I}fps=#{R},settb=#{T}#{O}', {
+				'I'	=> $r->{'video'},
+				'R'	=> $l->{'fps'},
+				'T'	=> $l->{'vtb'},
+				'O'	=> $vr_tmp,
+			}));
+			$r->{'video'}=$vr_tmp;
 	}
 
 	push(@fade,
@@ -1277,6 +1335,9 @@ $F{'complex:transition'}=sub {
 				'O'	=> $node->{'video'}
 			}),
 	);
+
+	$node->{'fps'}=$l->{'fps'};
+	$node->{'vtb'}=$l->{'vtb'};
 
 	return(@fade);
 };
@@ -1324,14 +1385,18 @@ $F{'complex:overlay'}=sub {
 	my($node, $config)=@_;
 	my($main)=$node->{'tree'}[0];
 	my($over)=$node->{'tree'}[1];
-	my($alpha, $color, $position)=(undef, undef, 'x=0:y=0');
-	my($valpha)=&next_labels($node, 'video' => 1);
+	my($x, $y, $eval)=(0, 0, 'init');
+	my($alpha, $color)=(undef, undef);
+	my($vatop)=&next_labels($node, 'video' => 1);
 	my(@overlay)=();
 
-	&copykeys($main => $node, 'width', 'height', 'fps');
+	&copykeys($main => $node, 'width', 'height', 'fps', 'atb', 'vtb');
+	$node->{'length'}=List::Util::min($main->{'length'}, $over->{'length'});
 	($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
-	foreach my $option (split(m|/|, $config)) {
+	foreach my $option (split(m|(?<!\\)/|, $config)) {
+		$option=~s|\\+/|/|g;
+
 		if($option=~m/^\d+$/) {
 			$alpha=$option;
 			if($alpha<0 || 100<$alpha) {
@@ -1339,37 +1404,71 @@ $F{'complex:overlay'}=sub {
 			}
 		} elsif($option=~m/^(0x|#)([\da-f]{6})(:[:\d.]+)?$/i) {
 			$color="0x$1$2";
-		} elsif($option=~m/^[a-z](:[:\d.]+)?$/i) {
+		} elsif($option=~m/^([a-z]+:[:\d.]+)?$/i) {
 			$color=$option;
-		} elsif($option=~m/^([+-]?\w+)[:x]([+-]?\w+)$/i) {
-			$position=&fmt('x=%d:y=%d', split(m/[x:]/i, $option));
+		} elsif($option=~m/^([^:]+?):([^:]+)$/i) {
+			$x=$1;
+			$y=$2;
+
+			$x=~s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|($1)/($2)|g;
+			$y=~s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|($1)/($2)|g;
+
+			$eval='frame' if($x=~m/\b[tn]\b/ || $y=~m/\b[tn]\b/);
 		}
 	}
 
 	push(@overlay,
-		&fmt('%s%samix=inputs=2:duration=shortest%s',
-			$main->{'audio'}, $over->{'audio'}, $node->{'audio'}),
+		&fmt('#{Ib}#{It}amix=inputs=2:duration=shortest#{O}', {
+				'Ib'	=> $main->{'audio'},
+				'It'	=> $over->{'audio'},
+				'O'	=> $node->{'audio'},
+		}),
 	);
 
 	if($color) {
 		push(@overlay,
-			&fmt('%schromakey=%s,colorchannelmixer=aa=%f%s',
-				$over->{'video'}, $color, $alpha/100, $valpha),
+			&fmt('#{It}chromakey=#{C},colorchannelmixer=aa=#{A}#{Ot}', {
+				'It'	=> $over->{'video'},
+				'C'	=> $color,
+				'A'	=> defined($alpha)?$alpha/100:1,
+				'Ot'	=> $vatop,
+			}),
 
-			&fmt('%s%soverlay=shortest=1:%s%s',
-				$main->{'video'}, $valpha, $position, $node->{'video'}),
+			&fmt("#{Ib}#{It}overlay='shortest=1:x=#{X}:y=#{Y}:eval=#{E}'#{O}",{
+				'Ib'	=> $main->{'video'},
+				'It'	=> $vatop,
+				'X'	=> $x,
+				'Y'	=> $y,
+				'E'	=> $eval,
+				'O'	=> $node->{'video'},
+			}),
 		);
 	} elsif($alpha) {
 		push(@overlay,
-			&fmt('%sformat=yuva444p,colorchannelmixer=aa=%f%s',
-				$over->{'video'}, $alpha/100, $valpha),
-			&fmt('%s%soverlay=shortest=1:%s%s',
-				$main->{'video'}, $valpha, $position, $node->{'video'}),
+			&fmt('#{It}format=yuva444p,colorchannelmixer=aa=#{A}#{Ot}', {
+				'It'	=> $over->{'video'},
+				'A'	=> $alpha/100,
+				'Ot'	=> $vatop,
+			}),
+			&fmt("#{Ib}#{It}overlay='shortest=1:x=#{X}:y=#{Y}:eval=#{E}'#{O}",{
+				'Ib'	=> $main->{'video'},
+				'It'	=> $vatop,
+				'X'	=> $x,
+				'Y'	=> $y,
+				'E'	=> $eval,
+				'O'	=> $node->{'video'},
+			}),
 		);
 	} else {
 		push(@overlay,
-			&fmt('%s%soverlay=shortest=1:%s%s',
-				$main->{'video'}, $over->{'video'}, $position, $node->{'video'}),
+			&fmt("#{Ib}#{It}overlay='shortest=1:x=#{X}:y=#{Y}:eval=#{E}'#{O}",{
+				'Ib'	=> $main->{'video'},
+				'It'	=> $over->{'video'},
+				'X'	=> $x,
+				'Y'	=> $y,
+				'E'	=> $eval,
+				'O'	=> $node->{'video'}
+			}),
 		);
 	}
 
@@ -1396,7 +1495,8 @@ $F{'group:concat'}=sub {
 	my(@inputs)=();
 	my(@concat)=();
 
-	&copykeys($node->{'tree'}[0] => $node, 'width', 'height', 'fps');
+	&copykeys($node->{'tree'}[0] => $node,
+		'width', 'height', 'fps', 'atb', 'vtb');
 
 	foreach my $child (@{$node->{'tree'}}) {
 		push(@inputs, $child->{'video'}, $child->{'audio'});
@@ -1404,7 +1504,8 @@ $F{'group:concat'}=sub {
 	}
 
 	if($count==1) {
-		&copykeys($node->{'tree'}[0] => $node, 'video', 'audio', 'fps');
+		&copykeys($node->{'tree'}[0] => $node,
+			'video', 'audio', 'fps', 'atb', 'vtb');
 	} else {
 		($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
@@ -1447,7 +1548,8 @@ $F{'group:stack'}=sub {
 		push(@ain, $sub->{'audio'});
 	}
 
-	&copykeys($node->{'tree'}[0] => $node, 'width', 'height', 'fps');
+	&copykeys($node->{'tree'}[0] => $node,
+		'width', 'height', 'fps', 'atb', 'vtb');
 	if($type eq 'h') {
 		$node->{'width'}=List::Util::sum(
 			map($_->{'width'}, @{$node->{'tree'}})
@@ -1510,7 +1612,8 @@ $F{'group:aoverlay'}=sub {
 	my($vout, $aout)=&next_labels($node);
 	my(@ain)=();
 
-	&copykeys($node->{'tree'}[0] => $node, 'video', 'width', 'height', 'fps');
+	&copykeys($node->{'tree'}[0] => $node,
+		'video', 'width', 'height', 'fps', 'atb', 'vtb');
 	$node->{'audio'}=$aout;
 
 	foreach my $child (@{$node->{'tree'}}) {
@@ -1598,6 +1701,7 @@ my(@ORDER)=qw(
 	simple:audio:delay
 	simple:audio:ffmpeg
 	simple:video:fps
+	simple:video:tb
 	simple:video:text
 	simple:video:crop
 	simple:video:scale
@@ -1620,7 +1724,7 @@ All non-blank lines not matching the following will cause errors:
 
         <#|;|//>[Comment text]
         user:<audio|video>:<name>  <token>[/X=a][...]  <filtername>[=options]
-	   user:transition:<key>      <xfade transition name>
+        user:transition:<key>      <xfade transition name>
 
 What this will do is create a simple audio or video filter type named C<token>.
 Optionally, C<token> can have options which are specified after.  These options
@@ -1795,14 +1899,16 @@ sub run_simple_user {
 
 =head2 Parsing Structure
 
-B<clips> is essentially a 2 pass compiler.  In the first pass, it tokenizes
-the command-line and creates a tree-like execution structure for the commands
-provided.  In this pass, unary, binary (e.g. C</> and C<%>), and matching
-(e.g. C<{> and C<}> operators are inserted into the tree and it's data is
-enhanced using all of the information found throughout the command-line.
+B<clips> is essentially a 3 pass compiler.  In the first pass, it
+pre-processes the command-line input into tokens. Then, in the second pass,
+reads the tokenizes and creates a tree-like execution structure for the
+commands provided.  In this pass, unary, binary (e.g. C</> and C<%>), and
+matching (e.g. C<{> and C<}> operators are inserted into the tree and it's
+data is enhanced using all of the information found throughout the
+command-line.
 
-In the second pass, that tree is turned into an executable L<ffmpeg(1)>
-command which can be run.  Each node in the tree is examined to determine
+In the third pass, that tree is turned into an executable L<ffmpeg(1)>
+command-line which can be run.  Each node in the tree is examined to determine
 which actions are taken, assign video streams as appropriate, and
 implement the filters to make each stage happen.  The tree is parsed in
 a depth-first fashion, culminating with the root node being the final
@@ -1834,7 +1940,7 @@ sub node {
 sub insert_branch {
 	my($leaf, $branch)=@_;
 	my($trunk)=$leaf->{'parent'};
-	my(@attrs)=qw(parent video audio width height fps);
+	my(@attrs)=qw(parent video audio width height fps atb vtb);
 
 	&copykeys($leaf => $branch, @attrs);
 
@@ -1877,6 +1983,12 @@ sub next_labels {
 	}
 
 	return(@labels);
+}
+
+sub chain {
+	my($node, $filter, @args)=@_;
+
+	push(@{$node->{$filter}}, [@args]);
 }
 
 #Note: 'complex' filters should be given their own node in the tree.
@@ -1925,6 +2037,8 @@ sub parse {
 				'width'	=> FFUtils::width($src),
 				'height'	=> FFUtils::height($src),
 				'fps'	=> FFUtils::framerate($src),
+				'vtb'	=> FFUtils::video_timebase($src),
+				'atb'	=> FFUtils::audio_timebase($src),
 				'video'	=> FFUtils::has_video($src),
 				'audio'	=> FFUtils::has_audio($src),
 			};
@@ -1986,7 +2100,7 @@ sub parse {
 			my($node)=&node(
 				'type'			=> 'complex',
 				'tree'			=> [],
-				'timer'			=> 'first',
+				'timer'			=> 'shortest',
 
 				%filt,
 
@@ -2018,6 +2132,7 @@ sub parse {
 				'parent'			=> $cur,
 				'merge'			=> $type,
 				'timer'			=> 'shortest',
+
 				'group:stack'		=> [ $type ],
 
 				%filt,
@@ -2106,6 +2221,8 @@ sub parse {
 				$node->{'width'}=$SOURCES{$src}{'width'};
 				$node->{'height'}=$SOURCES{$src}{'height'};
 				$node->{'fps'}=$SOURCES{$src}{'fps'};
+				$node->{'vtb'}=$SOURCES{$src}{'vtb'};
+				$node->{'atb'}=$SOURCES{$src}{'atb'};
 			} else {
 				$node->{'width'}=0;
 				$node->{'height'}=0;
@@ -2116,12 +2233,22 @@ sub parse {
 			}
 
 			if($ARG{'normalize'}) {
-				$node->{'simple:audio:normalize'}=[];
+				&chain($node, 'simple:audio:normalize');
 			}
 
-			if($ARG{'practice'}) {
-				$node->{'simple:video:fps'}=[$ARG{'rate'}];
-				$node->{'simple:video:scale'}=[$ARG{'resolution'}];
+			if($ARG{'rate'} && !$node->{'simple:video:fps'}) {
+				&chain($node, 'simple:video:fps', $ARG{'rate'});
+			}
+
+			unless( $node->{'simple:video:scale'}
+				|| $cur->{'merge'} eq 'a'
+				|| $cur->{'complex:audio'}
+			) {
+				if($ARG{'rin'}) {
+					&chain($node, 'simple:video:scale', $ARG{'rin'});
+				} elsif($ARG{'res'}) {
+					&chain($node, 'simple:video:scale', $ARG{'res'});
+				}
 			}
 
 			if($ARG{'audio-only'}) {
@@ -2132,10 +2259,6 @@ sub parse {
 
 			if($end > $SOURCES{$src}{'length'}) {
 				&err(3, "'$2' is past the end of $src.");
-			}
-
-			if($cur->{'type'} eq 'group' && $cur->{'merge'} ne 'a' && !$node->{'simple:video:scale'}) {
-				push(@{$node->{'simple:video:scale'}}, []);
 			}
 
 			push(@{$cur->{'tree'}}, $node);
@@ -2318,12 +2441,12 @@ sub map_outputs {
 		push(@program, '-c:a', 'copy');
 	}
 
-	push(@program, '-map', $root->{'video'});
+	push(@program, '-map', $root->{'video'}) if($root->{'video'});
 	if($ARG{'audio-only'}) {
 		($JFH, $JUNK)=File::Temp::tempfile(SUFFIX => '.mp4');
 		push(@program, $JUNK);
 	}
-	push(@program, '-map', $root->{'audio'});
+	push(@program, '-map', $root->{'audio'}) if($root->{'audio'});
 
 	return(@program);
 }
@@ -2397,9 +2520,16 @@ $ROOT=&parse(@ARGV);
 &compute_lengths($ROOT);
 
 push(@FFPROGRAM, &map_outputs($ROOT));
-push(@FFPROGRAM, '-s', $ARG{'resolution'})			if($ARG{'resolution'});
+if($ARG{'rout'}) {
+	push(@FFPROGRAM, '-s', $ARG{'rout'});
+} elsif($ARG{'res'}) {
+	push(@FFPROGRAM, '-s', $ARG{'res'});
+}
+if($ARG{'end'} && $ARG{'end'} < $ROOT->{'length'}) {
+	push(@FFPROGRAM, '-to', $ARG{'end'});
+	$ROOT->{'length'}=$ARG{'end'};
+}
 push(@FFPROGRAM, '-r', $ARG{'rate'})				if($ARG{'rate'});
-push(@FFPROGRAM, '-to', $ARG{'end'})				if($ARG{'end'});
 push(@FFPROGRAM, &tag('title', $ARG{'title'}))		if($ARG{'title'});
 push(@FFPROGRAM, &tag('comment', $ARG{'comment'}))	if($ARG{'comment'});
 push(@FFPROGRAM, &tag('description', $ARG{'description'}))	if($ARG{'description'});
@@ -2551,7 +2681,9 @@ style transition of 1.4 seconds.
 Create a file F<new.mp4> with 3 clips from F<source.mp4> all using a
 2 second fade transition.
 
-=item clips -g 1920:1080 new.mp4 intro.mp4 0- { left.mp4 0:19.600- right.mp4 0- } outro.mp4 0-0:34.369 /0.5 0:38.900-
+=item clips -r 1920:1080 new.mp4 intro.mp4 0-
+      {/h left.mp4 0:19.600- right.mp4 0- }
+      outro.mp4 0-0:34.369 /0.5 0:38.900-
 
 Create F<new.mp4> by using an intro file, then having a segment consisting
 of the two files F<left.mp4> and F<right.mp4> stacked horizontally.  Finish
@@ -2604,12 +2736,19 @@ shutter, or hang, then it might be the frame rate.  Before trying anything
 else, use he C<-R> or C<-rate> command-line options to specify a standard
 frame rate like 30 or 60 before making other changes.
 
-To make the interface clean, L<ffmpeg(1)> is run with the C<-loglevel fatal>
-and it doesn't provide the best error statements.  Frankly, there are no
-good ffmpeg error statements for end-users.  But, these are particularly
-uninformative.  So, be aware of that when failures occur.  The best choice
-is to run win C<-n> or C<-dry-run> mode and copy/paste the commandline you
-get there.
+To make the interface clean, but helpful, L<ffmpeg(1)> is run with the
+C<-loglevel error> option which sometimes spits things to the screen
+you don't care about.  But, it is the best balance of telling you when
+something is wrong vs allowing the interface to work as desired.
+If this gives you errors you don't want, sorry.  If this isn't giving you
+the right errors, try C<-n> or C<-dry-run> mode and copy/paste the
+commandline you get there.  That will give you a lot more information.
+
+This whole program is supposed to be simple and easy, as an alternative to
+the complexity of L<ffmpeg(1)>.  Well, it fails at this miserably.  Trying
+to make all the basic features simple requires way more syntactical sugar
+than it should have.  While being way more complex than it should desired,
+it is still much more accessible than the language it compiles into.
 
 =head1 EXIT CODES
 

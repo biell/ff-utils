@@ -131,8 +131,8 @@ Examples
   of the two files `left.mp4` and `right.mp4` stacked horizontally.  Finish
   off with two clips from the file `outro.mp4`.
 
-        clips -g 1920:1080 new.mp4 intro.mp4 0-  \
-          { left.mp4 0:19.600- right.mp4 0- }    \
+        clips -r 1920:1080 new.mp4 intro.mp4 0-  \
+          {/h left.mp4 0:19.600- right.mp4 0- }  \
           outro.mp4 0-0:34.369 /0.5 0:38.900-
 
 * This will create a 30 second clip of top.mp4 layed over base.mp4 in a way
@@ -167,8 +167,9 @@ Examples
   for the video files.
 
         clips -1 src1.mp4 -2 src2.mp4 -3 src3.mp4 -4 src4.mp4 carousel.mp4 \
-          [1] 0-10 /10/L  [2] 0-10 /10/L  [3] 0-10 /10/L [4] 0-10 /10/L \
-          [1] 10-20 /10/L [2] 10-20 /10/L [3] 0-20 /10/L [4] 10-15 
+          [1] 5-10 /5/L  [2] 0-10 /5/L  [3] 0-10 /5/L  [4] 0-10 /5/L \
+          [1] 10-20 /5/L [2] 10-20 /5/L [3] 10-20 /5/L [4] 10-15
+
 
 * Print out all Sans fonts with a Bold and Italic style
 

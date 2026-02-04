@@ -50,7 +50,7 @@ sub get_info {
 	my($file)=@_;
 	my($probe)=IO::Handle->new;
 	my(@ffprobe)=qw(ffprobe -of json -v quiet -show_format -show_streams);
-	my(@fractions)=qw(r_frame_rate avg_frame_rate time_base);
+	my(@fractions)=qw(r_frame_rate avg_frame_rate);
 	my($info);
 	local($/)=undef;
 	
@@ -146,6 +146,14 @@ sub height {
 
 sub framerate {
 	return(&probe($_[0], 'video:r_frame_rate'));
+}
+
+sub video_timebase {
+	return(&probe($_[0], 'video:time_base'));
+}
+
+sub audio_timebase {
+	return(&probe($_[0], 'audio:time_base'));
 }
 
 sub clamp {
