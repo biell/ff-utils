@@ -1,7 +1,8 @@
 #Test suite for clips
 
-TESTS = concat-4k grid-4k overlay-4k simple fade transition mirror tro groovy \
-		passthrough tteffect carousel blur three text clipings
+TESTS = concat-4k grid1 grid2 overlay-4k simple fade transition mirror tro \
+		groovy passthrough tteffect1 tteffect2 carousel blur three text \
+		clipings wind
 
 all: font $(addsuffix .mp4, $(TESTS))
 	@echo
@@ -15,13 +16,17 @@ concat-4k.mp4:
 	clips $@ src/town-4k-10.mp4 0- \
 		src/dam-4k-10.mp4 0- src/rocks-4k-10.mp4 0-
 
-grid-4k.mp4: concat-4k.mp4
+grid1.mp4: concat-4k.mp4
 	clips -r:in 1920:1080 -0 concat-4k.mp4 -1 src/mountain-4k-30.mp4 \
-		-2 src/adjust-4k-30.mp4 -3 src/pattern-4k-30.mp4 $@ \
+		-2 src/adjust-4k-30.mp4 -3 src/pattern-4k-30.mp4 $@         \
 		{/v {/h [0]0:05-0:25 [1]0:01-0:21 } {/h [2]0:09-0:29 [3]0:01-0:21 } }
 
-overlay-4k.mp4: grid-4k.mp4
-	clips -d $@ grid-4k.mp4 0- '%/div(W-w,2):div(H-h,2)' \
+grid2.mp4:
+	clips $@ {/2x2 src/bear-hd-30.mp4 0-15 src/plasma-hd-30.mp4 0-15 \
+		src/clock-hd-30.mp4 0-15 src/sunset-hd-30.mp4 0-15 }
+
+overlay-4k.mp4: grid1.mp4
+	clips -d $@ grid1.mp4 0- '%/div(W-w,2):div(H-h,2)' \
 		src/melting-vert-ld-30.mp4 scale/810:1440 0:05-0:25
 
 simple.mp4:
@@ -49,18 +54,24 @@ groovy.mp4:
 passthrough.mp4:
 	clips $@ src/clock-hd-30.mp4 ffmpeg/v/unsharp=7:7:-2:7:7:-2 0-0:15
 
-tteffect.mp4:
-	clips $@ src/girl-vert-4k-10.mp4 fade-in {/h               \
-          crop/674:1440:1:420 flip ffmpeg/v/gblur=40 { scale/1214:2160 0- }  \
-          crop/1212:1440:2:420 { scale/1216:2160 0- }                        \
-          crop/674:1440:-1:420 flip ffmpeg/v/gblur=40 { scale/1214:2160 0- } \
-        } fade-out
+tteffect1.mp4:
+	clips $@ src/walking-vert-hd-10.mp4 fade-in {/h     \
+			crop/448:1080:1:280 flip ffmpeg/v/gblur=40 0-  \
+			crop/1024:1080:0:280 0-                        \
+			crop/448:1080:-1:280 flip ffmpeg/v/gblur=40 0- \
+		} fade-out
+
+tteffect2.mp4:
+	clips $@ src/beach-vert-4k-10.mp4 fade-in { \
+			scale/2560:1440/fill crop/2160:2000:0:1000 ffmpeg/v/gblur=50 0- \
+			%/'(W-w)\/2':0 scale/1216:1440/fill crop/2160:2560:0:800 0-     \
+		} fade-out
 
 carousel.mp4:
 	clips -r:in 1080:1920 -1 src/a-vert-hd-30.mp4 -2 src/b-vert-hd-30.mp4 \
-		-3 src/cutting-vert-ld-30.mp4 -4 src/melting-vert-ld-30.mp4 $@ \
-          [1] 5-10 /5/L  [2] 0-10 /5/L  [3] 0-10 /5/L  [4] 0-10 /5/L \
-          [1] 10-20 /5/L [2] 10-20 /5/L [3] 10-20 /5/L [4] 10-15 
+		-3 src/cutting-vert-ld-30.mp4 -4 src/melting-vert-ld-30.mp4 $@   \
+		[1] 5-10 /5/L  [2] 0-10 /5/L  [3] 0-10 /5/L  [4] 0-10 /5/L       \
+		[1] 10-20 /5/L [2] 10-20 /5/L [3] 10-20 /5/L [4] 10-15 
 
 blur.mp4:
 	clips $@ src/sunset-hd-30.mp4 blur-in speed/2 10-30 blur-out
@@ -82,5 +93,9 @@ clipings.mp4:
 			crop/536:930:1361:70 4.083-7.550		\
 		}
 
+wind.mp4:
+	clips $@ src/autumn-hd-10.mp4 0- /3/hlwind src/clouds-hd-39.mp4 0-10
+
 clean:
 	rm -f *.mp4
+
