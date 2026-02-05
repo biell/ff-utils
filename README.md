@@ -99,6 +99,20 @@ creation on the command-line without expensive video editing software.
 And, your high-end software might be using `ffmpeg` under the covers
 anyway.
 
+Note that while building vertical and horizontal stacks can be mentally
+helpful for people, a little less syntactical sugar can be used with
+a grid grouping and some variables:
+
+        $ S='red/START'
+        $ F='middle:top/FINISH'
+        $ clips race.mp4 -1 jeff.mp4 -2 bodhi.mp4 -3 austen.mp4 -4 nico.mp4 \
+	       text/0:05-0:08/$S {/2x2                                         \
+              text/8:03.349-8:06/$F [1]0:14.367-8:44                        \
+              text/7:58.903-8:02/$F scale/1920:1080 v/0.7 [2]1:03.130-9:33  \
+              text/7:46.201-7:50/$F v/1.5 [3]0:37.284-9:07                  \
+              text/7:49.489-7:53/$F v/0.5 [4]0:21.697-8:51                  \
+            }
+
 Examples
 --------
 
