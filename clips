@@ -913,7 +913,7 @@ $F{'simple:video:crop'}=sub {
 	return(&fmt('crop=%d:%d:%d:%d', $w, $h, $x, $y));
 };
 
-=item scale[/H:W]
+=item scale[/H:W][/<fill|pad>]
 
 Scale the next video to the default height and width, or what is specified
 with the token.
@@ -926,8 +926,9 @@ inside a grouping, an implied C<scale> filter is applied to all clips which
 don't match the first video's resolution.
 
 The final thing to note about B<clips>' C<scale> token is that it respects
-the original aspect ratio, adding black bars if necessary to match the
-requested dimensions without altering the aspect ratio.  Use
+the original aspect ratio by default, adding black bars if necessary to match
+the requested dimensions without altering the aspect ratio.  Place a
+C</fill> string at the end of the token to disable this feature, use
 C<ffmpeg/v/scale> to call L<ffmpeg(1)>'s scale in an unintelligent way,
 or see the C<resize> configuration in the example user filter file which
 performs an exact user-specified scale operation regardless of how they
@@ -935,14 +936,14 @@ might look different than the original.
 
 =cut
 
-$M{'simple:video:scale'}='scale/?([\dx:]*)';
+$M{'simple:video:scale'}='scale/?([\dx:]*)(/[fp][ilad]*)?';
 $F{'simple:video:scale'}=sub {
 	my($node)=$_[0];
 	my($resolution)=$_[1] || $ARG{'res'};
+	my($fill)=($_[2]=~m|^\s*/f|);
 	my($parent)=$node->{'parent'};
 	my($w, $h)=split(m/[x:]/i, $resolution);
-	my($scale)='scale=%d:%d:force_original_aspect_ratio=decrease:reset_sar=1';
-	my($pad)='pad=%d:%d:(ow-iw)/2:(oh-ih)/2';
+	my(@scale)=();
 
 	unless($resolution) {
 		if($parent->{'type'} eq 'group') {
@@ -953,30 +954,51 @@ $F{'simple:video:scale'}=sub {
 
 	if($parent && $parent->{'type'} eq 'group' && $parent->{'merge'} ne 'c') {
 		if($parent->{'merge'} eq 'h') {
-			return() if($node->{'height'}==$h);
+			return(@scale) if($node->{'height'}==$h);
 
 			$node->{'width'}=&even($node->{'width'}*$h/$node->{'height'});
 			$node->{'height'}=$h;
 		} elsif($parent->{'merge'} eq 'v') {
-			return() if($node->{'width'}==$w);
+			return(@scale) if($node->{'width'}==$w);
 
 			$node->{'height'}=&even($node->{'height'}*$w/$node->{'width'});
 			$node->{'width'}=$w;
+		} elsif($parent->{'merge'} eq 'x') {
+			return(@scale) if($node->{'width'}==$w && $node->{'height'}==$h);
+
+			$node->{'width'}=$w;
+			$node->{'height'}=$h;
 		} else {
 			&err(5, 'Unknown group merge function:', $parent->{'merge'});
 		}
 
-		return(&fmt($scale, $node->{'width'}, $node->{'height'}));
+		push(@scale, &fmt(
+			'scale=#{W}:#{H}:force_original_aspect_ratio=#{A}:reset_sar=1', {
+					'W'	=> $node->{'width'},
+					'H'	=> $node->{'height'},
+					'A'	=> $fill?'disable':'decrease',
+		}));
 	} elsif($node->{'width'}!=$w || $node->{'height'}!=$h) {
 		$node->{'width'}=$w;
 		$node->{'height'}=$h;
-		return(
-			&fmt($scale, $w, $h),
-			&fmt($pad, $w, $h)
+
+		push(@scale, &fmt(
+			'scale=#{W}:#{H}:force_original_aspect_ratio=#{A}:reset_sar=1', {
+					'W'	=> $node->{'width'},
+					'H'	=> $node->{'height'},
+					'A'	=> $fill?'disable':'decrease',
+			}),
 		);
+
+		push(@scale,
+			&fmt('pad=#{W}:#{H}:(ow-iw)/2:(oh-ih)/2', {
+					'W'	=> $node->{'width'},
+					'H'	=> $node->{'height'},
+			}),
+		) unless($fill);
 	}
 
-	return();
+	return(@scale);
 };
 
 =item flip[/<h|v>]
@@ -1276,7 +1298,10 @@ $M{'simple:audio:delay'}='delay/([\d.]+)';
 $F{'simple:audio:delay'}=sub {
 	my($node, $delay)=@_;
 
-	return(&fmt('adelay=delays=%d:all=1', $delay*1000));
+	return(
+		&fmt('adelay=delays=%d:all=1', $delay*1000),
+		&fmt('atrim=duration=%f', $node->{'length'}),
+	);
 };
 
 =item /[seconds][[/]type]
@@ -1354,9 +1379,12 @@ This defaults to C<66>, for an alpha configuration of C<0.66>. This is
 the default mode and produces an image where both inputs are blended
 together.
 
-If C<option> is of the form X:Y or XxY, then these will be the X and Y
+If C<option> is of the form X:Y or XxY, then these will be the C<X> and C<Y>
 coordinates of the top left corner of the overlayed image.  This really only
-makes sense if the overlayed (left) image is smaller.
+makes sense if the overlayed (left) image is smaller.  Additionally,
+the keywords C<left>, C<middle>, and C<right> may be used for the C<X>
+coordinate and C<top>, C<center>, and C<bottom> may be used for the C<Y>
+coordinate.
 
 Any other C<option> will be treated as an attempt to specify a color to
 be treated as an alpha color.  Examples are C<lime>, C<0x00FF00>, and
@@ -1388,6 +1416,14 @@ $F{'complex:overlay'}=sub {
 	my($x, $y, $eval)=(0, 0, 'init');
 	my($alpha, $color)=(undef, undef);
 	my($vatop)=&next_labels($node, 'video' => 1);
+	my(%coords)=(
+		'top'	=> '0',
+		'center'	=> '(H-h)/2',
+		'bottom'	=> 'H-h',
+		'left'	=> '0',
+		'middle'	=> '(W-w)/2',
+		'right'	=> 'W-w',
+	);
 	my(@overlay)=();
 
 	&copykeys($main => $node, 'width', 'height', 'fps', 'atb', 'vtb');
@@ -1407,8 +1443,8 @@ $F{'complex:overlay'}=sub {
 		} elsif($option=~m/^([a-z]+:[:\d.]+)?$/i) {
 			$color=$option;
 		} elsif($option=~m/^([^:]+?):([^:]+)$/i) {
-			$x=$1;
-			$y=$2;
+			$x=$coords{$1} || $1;
+			$y=$coords{$2} || $2;
 
 			$x=~s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|($1)/($2)|g;
 			$y=~s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|($1)/($2)|g;
@@ -1522,12 +1558,13 @@ $F{'group:concat'}=sub {
 	return(@concat);
 };
 
-=item {[/]<h|v> <...> }
+=item {[/]<h|v|#x#> <...> }
 
 Create grouped segments stacked in a parallel fashion.  Use this syntax
 to combine multiple files by either stacking them horizontally with C<hstack>,
-vertically with C<vstack>.  All operations outside the braces will be applied
-to the combined video against it's new resolution.
+vertically with C<vstack>, or in a grid with C<xstack>.  All operations
+outside the braces will be applied to the combined video against it's new
+resolution.
 
 Stack notes:
 the duration of the combination is based on the shortest sub entry.
@@ -1577,6 +1614,51 @@ $F{'group:stack'}=sub {
 			'D'	=> 'shortest',
 			'O'	=> $node->{'audio'}
 		}));
+
+	return(@stack);
+};
+
+$M{'group:xstack'}='{/?(\d+)[x:](\d+)';
+$F{'group:xstack'}=sub {
+	my($node, $x, $y)=@_;
+	my($n)=$x*$y;
+	my(@vin)=();
+	my(@ain)=();
+	my(@stack)=();
+
+	foreach my $sub (@{$node->{'tree'}}) {
+		push(@vin, $sub->{'video'});
+		push(@ain, $sub->{'audio'});
+	}
+
+	if(@vin<$n) {
+		&err(13, "Not enough clips to fill a ${x}x${y} grid");
+	} elsif(@vin>$n) {
+		&err(13, "Too many clips for a ${x}x${y} grid");
+	}
+
+	&copykeys($node->{'tree'}[0] => $node, 'fps', 'atb', 'vtb');
+
+	$node->{'width'}=$node->{'tree'}[0]{'width'}*$x;
+	$node->{'height'}=$node->{'tree'}[0]{'height'}*$y;
+
+	($node->{'video'}, $node->{'audio'})=&next_labels($node);
+
+	push(@stack,
+		&fmt('#{Is}xstack=grid=#{X}x#{Y}:#{D}=1#{O}', {
+			'Is'	=> join('', @vin),
+			'X'	=> $x,
+			'Y'	=> $y,
+			'D'	=> 'shortest',
+			'O'	=> $node->{'video'},
+		}),
+		&fmt('#{Is}amix=inputs=#{N}:duration=#{D}#{O}', {
+			'Is'	=> join('', @ain),
+			'N'	=> scalar(@ain),
+			'D'	=> 'shortest',
+			'O'	=> $node->{'audio'}
+		}),
+	);
 
 	return(@stack);
 };
@@ -1687,6 +1769,7 @@ run C<clips -print=order>.
 
 my(@ORDER)=qw(
 	group:stack
+	group:xstack
 	group:concat
 	group:aoverlay
 	complex:audio
@@ -2134,6 +2217,22 @@ sub parse {
 				'timer'			=> 'shortest',
 
 				'group:stack'		=> [ $type ],
+
+				%filt,
+			);
+
+			push(@{$cur->{'tree'}}, $node);
+			$cur=$node;
+
+			%filt=();
+		} elsif(@args=m|^$M{'group:xstack'}|i) {
+			my($node)=&node(
+				'type'			=> 'group',
+				'parent'			=> $cur,
+				'merge'			=> 'x',
+				'timer'			=> 'shortest',
+
+				'group:xstack'		=> [ @args ],
 
 				%filt,
 			);
@@ -2812,6 +2911,10 @@ end beyond the actual length of the clip.
 =item Z<>12
 
 A reference was made to a file placeholder which does not exist.
+
+=item Z<>13
+
+An incorrect number of clips were provided to an C<xstack> group.
 
 =item Z<>100
 
