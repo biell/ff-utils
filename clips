@@ -1049,6 +1049,9 @@ $F{'complex:fade'}=sub {
 		&err(11, "Fade cannot be longer than the actual clip.");
 	}
 
+	&copykeys($node->{'tree'}[0] => $node,
+		'width', 'height', 'fps', 'atb', 'vtb');
+
 	%macros=(
 		'T'	=> lc($type),
 		'S'	=> ($type eq 'out')?$node->{'length'}-$length:0,
@@ -1099,6 +1102,9 @@ $F{'complex:blur'}=sub {
 	my($macros);
 
 	$length||=$ARG{'fade'};
+
+	&copykeys($node->{'tree'}[0] => $node,
+		'width', 'height', 'fps', 'atb', 'vtb');
 	($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
 	if($length>$node->{'length'}) {
@@ -1217,6 +1223,9 @@ $F{'complex:speed'}=sub {
 	my(@speed)=();
 
 	$speed||=$ARG{'speed'};
+
+	&copykeys($node->{'tree'}[0] => $node,
+		'width', 'height', 'fps', 'atb', 'vtb');
 
 	push(@speed, &fmt('#{I}setpts=#{S}*PTS#{O}', {
 			'I'	=> $vin,
