@@ -13,14 +13,23 @@
 #  * _L - Audio and/or Video length (duration) in seconds
 #  * _F - Video frames/second as a floating point number
 #
+#  * Any math contained within backticks (`) will be evaluated if possible
+#    e.g. `1/#{_F}` or `#{N}/2`
+#
 ###################################################################
                    
 user:transition:r    radial
+user:transition:lcut custom:expr=A
+user:transition:jcut custom:expr=B
 
 user:audio:mute      mute                volume=0
 user:audio:cave      cave/D=1100         aecho=1:0.7:#{D}:0.7,\
                                          aecho=0.8:0.6:#{D}:0.6,\
                                          atrim=duration=#{_L}
+
+user:audio:afo       afo/N=0.5           afade=t=out:st=`#{_L}-#{N}`:\
+                                         d=#{N}:curve=cbr
+user:audio:afi       afi/N=0.5           afade=t=in:st=0:d=#{N}:curve=cbr
 
 user:audio:speech    speech/N            afftdn=nf=#{N},dialoguenhance,\
                                          volume=2

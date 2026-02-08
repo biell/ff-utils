@@ -14,7 +14,6 @@ my(@FFLOG)=qw(-loglevel error);
 my(%DB)=();
 
 our($DEBUG)=0;
-our($NORMALIZE)='loudnorm,dynaudnorm,highpass=f=600';
 
 my($MB)=2**20;
 

@@ -409,8 +409,10 @@ sub fmt {
 	if(@_) {
 		$out=sprintf($fmt, @_);
 		$out=~s/(\d+\.\d{6})/$1+0/eg; #Even if fails, number is still valid
+		$out=~s|`([\d.*/+-]+)`|eval($1)|eg;
 		return($out);
 	} else {
+		$fmt=~s|`([\d.*/+-]+)`|eval($1)|eg;
 		return($fmt);
 	}
 }
@@ -608,6 +610,8 @@ supported:
 
 =over 8
 
+=item a - audio-only fade
+
 =item f - fade
 
 =item g - fadegrays
@@ -635,6 +639,7 @@ supported:
 =cut
 
 my(%TRANSITION)=(
+	'a'	=> "custom:expr='if(gt(P,0.5),A,B)'",
 	'f'	=> 'fade',
 	'g'	=> 'fadegrays',
 	'd'	=> 'dissolve',
@@ -1187,7 +1192,7 @@ C<2>.
 
 =cut
 
-$M{'simple:audio:denoise'}='denoise/?([\d.]*)';
+$M{'simple:audio:denoise'}='denoise/?([\d.]+)?';
 $F{'simple:audio:denoise'}=sub {
 	my($node, $volume)=@_;
 	my($denoise)=join(',', qw(
@@ -1213,7 +1218,7 @@ and video are adjusted appropriately.
 
 =cut
 
-$M{'complex:speed'}='speed/?([\d.]*)';
+$M{'complex:speed'}='speed/?([\d.]+)?';
 $F{'complex:speed'}=sub {
 	my($node, $speed)=@_;
 	my($diff)=($node->{'length'}/$speed) - $node->{'length'};
@@ -1262,13 +1267,11 @@ would mute the next segment.
 
 =cut
 
-$M{'simple:audio:volume'}='v[olume]*/?([\d.]*)';
+$M{'simple:audio:volume'}='v[olume]*/?([\d.]+)?';
 $F{'simple:audio:volume'}=sub {
 	my($node, $volume)=@_;
 
-	if($volume eq '') {
-		$volume=$ARG{'volume'};
-	}
+	$volume//=$ARG{'volume'};
 
 	if($volume!=1) {
 		return(&fmt('volume=%f', $volume));
@@ -1286,13 +1289,20 @@ talking and/or background noise.  It is not recommended for music.
 
 =cut
 
-$M{'simple:audio:normalize'}='norm[alize]*/?([\d.]*)';
+$M{'simple:audio:normalize'}='norm[alize]*/?([\d.]+)?';
 $F{'simple:audio:normalize'}=sub {
 	my($node, $volume)=@_;
+	my(@norm)=qw(
+		loudnorm
+		dynaudnorm
+		highpass=f=600
+	);
 
 	$volume//=$ARG{'volume'};
 
-	return(&fmt('%s,volume=%f', $FFUtils::NORMALIZE, $volume));
+	push(@norm, &fmt('volume=%f', $volume));
+
+	return(@norm);
 };
 
 =item delay/<#>
@@ -1321,6 +1331,11 @@ C</3.5/d>, C</3.5/windlr>, C</L> which fade for the non-default 3.5 seconds,
 do so with a dissolve fade, do so with the wind left-to-right, and a standard
 0.8 seconds of left fade respectively.
 
+Note that the audio-only transition type will perform a hard cut at the
+midpoint of the transition, with the standard audio blend.  So, if the
+default 0.8 transition is requested, then the left video will loose the
+final 0.4 seconds while the right video will loose the first 0.4.
+
 =cut
 
 $M{'complex:transition'}='/([\d.]*)/?([a-zA-Z]*)';
@@ -1331,6 +1346,7 @@ $F{'complex:transition'}=sub {
 	my(@fade)=();
 
 	&copykeys($l => $node, 'width', 'height', 'fps', 'atb', 'vtb');
+	$node->{'length'}=$offset+$r->{'length'};
 	($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
 	$type=$TRANSITION{$type} || $type;
@@ -1369,9 +1385,6 @@ $F{'complex:transition'}=sub {
 				'O'	=> $node->{'video'}
 			}),
 	);
-
-	$node->{'fps'}=$l->{'fps'};
-	$node->{'vtb'}=$l->{'vtb'};
 
 	return(@fade);
 };
@@ -1536,7 +1549,7 @@ the brace, but this is the default action and unnecessary.
 $M{'group:concat'}='{/?c?';
 $F{'group:concat'}=sub {
 	my($node)=@_;
-	my($count)=0;
+	my($v, $a)=(0, 0);
 	my(@inputs)=();
 	my(@concat)=();
 
@@ -1544,11 +1557,17 @@ $F{'group:concat'}=sub {
 		'width', 'height', 'fps', 'atb', 'vtb');
 
 	foreach my $child (@{$node->{'tree'}}) {
-		push(@inputs, $child->{'video'}, $child->{'audio'});
-		$count++;
+		if($child->{'video'}) {
+			push(@inputs, $child->{'video'});
+			$v++;
+		}
+		if($child->{'audio'}) {
+			push(@inputs, $child->{'audio'});
+			$a++;
+		}
 	}
 
-	if($count==1) {
+	if($v==1 && $a==1) {
 		&copykeys($node->{'tree'}[0] => $node,
 			'video', 'audio', 'fps', 'atb', 'vtb');
 	} else {
@@ -1556,11 +1575,11 @@ $F{'group:concat'}=sub {
 
 		push(@concat, &fmt('#{Is}concat=n=#{N}:v=#{V}:a=#{A}#{Ov}#{Oa}', {
 				'Is'	=> join('', @inputs),
-				'N'	=> $count,
-				'V'	=> 1,
-				'A'	=> 1,
-				'Ov'	=> $node->{'video'},
-				'Oa'	=> $node->{'audio'},
+				'N'	=> List::Util::max($v, $a),
+				'V'	=> $v>0?1:0,
+				'A'	=> $a>0?1:0,
+				'Ov'	=> $v>0?$node->{'video'}:'',
+				'Oa'	=> $a>0?$node->{'audio'}:'',
 			}));
 	}
 
@@ -1909,7 +1928,7 @@ sub read_user_file {
 			redo;
 		}
 
-		if(m|^user:transition:(\w+)\s+(\w+)|) {
+		if(m|^user:transition:(\w+)\s+(\S+)|) {
 			$TRANSITION{$1}=$2;
 			if($ARG{'debug'}>5) {
 				printf(" User transition: %3s = %s\n\n", $1, $2);
@@ -2924,6 +2943,11 @@ A reference was made to a file placeholder which does not exist.
 =item Z<>13
 
 An incorrect number of clips were provided to an C<xstack> group.
+
+=item Z<>14
+
+An attempt was made to transition two clips where one has only audio
+and another has both audio and video.
 
 =item Z<>100
 
