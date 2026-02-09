@@ -2,7 +2,7 @@
 
 TESTS = concat-4k grid1 grid2 overlay-4k simple fade transition mirror tro \
 		groovy passthrough tteffect1 tteffect2 carousel blur three text \
-		clipings wind
+		clipings wind utran
 
 all: font $(addsuffix .mp4, $(TESTS))
 	@echo
@@ -95,6 +95,10 @@ clipings.mp4:
 
 wind.mp4:
 	clips $@ src/autumn-hd-10.mp4 0- /3/hlwind src/clouds-hd-39.mp4 0-10
+
+utran.mp4: tro.mp4
+	clips -F ../userfilters.clips $@ tro.mp4 0-4 /lcut 8-14
+
 
 clean:
 	rm -f *.mp4

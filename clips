@@ -17,6 +17,7 @@ use Getopt::Long;
 use Data::Dumper;
 use Pod::Usage;
 use File::Temp;
+use Digest::MD5;
 use FFUtils;
 
 =head1 SYNOPSIS
@@ -116,6 +117,11 @@ filter.  See below under L<Fonts> for more information on how B<clips>
 searches for fonts.  If that interface is unavailable (it uses Fontconfig)
 what works best is to specify a path to a TureType (TTF) font
 file.
+
+=item -S or -substitute
+
+For files (input or output) substitue C<%<l>> formats similar to
+the L<date(1)> command.  This only works on files.
 
 =item -R <#> or -rate=<#>
 
@@ -231,6 +237,7 @@ my(@OPTIONS)=qw(
 	rin|r-in|res-in|resolution-in=s
 	rate|framerate|frame-rate|fps|R=f
 	font|F=s
+	format|substitute|sub|S
 	audio-only|A
 	practice|P
 	end|E=s
@@ -283,7 +290,6 @@ my(@MPV)=qw(mpv --osd-fractions --msg-level=cplayer=no,statusline=status);
 my(@WATCH)=();
 
 my($DST)=shift;
-my($JFH, $JUNK);
 my(%SOURCES)=();
 my($ROOT)=undef;
 my(@INPUTS)=();
@@ -872,7 +878,7 @@ $F{'simple:video:text'}=sub {
 		}
 	}
 
-	foreach my $key (keys(%params)) {
+	foreach my $key (sort(keys(%params))) {
 		$drawtext.="$key='$params{$key}':" if($key && $params{$key});
 	}
 	$drawtext.=sprintf("text='%s'", $text);
@@ -1171,7 +1177,13 @@ video clip, you can use C<v/0> to set the volume to 0.
 $M{'complex:audio'}='audio';
 $F{'complex:audio'}=sub {
 	my($node)=@_;
+	my(@audio)=();
 
+	if($node->{'tree'}[0]{'video'}) {
+		push(@audio, &fmt('#{I}nullsink', {
+				'I'	=> $node->{'tree'}[0]{'video'},
+		}));
+	}
 	&copykeys($node->{'tree'}[0] => $node, 'audio', 'atb');
 
 	$node->{'video'}=undef;
@@ -1180,7 +1192,7 @@ $F{'complex:audio'}=sub {
 	$node->{'width'}=undef;
 	$node->{'height'}=undef;
 
-	return();
+	return(@audio);
 };
 
 =item denoise[/#]
@@ -1567,7 +1579,7 @@ $F{'group:concat'}=sub {
 		}
 	}
 
-	if($v==1 && $a==1) {
+	if($v<2 && $a<2) {
 		&copykeys($node->{'tree'}[0] => $node,
 			'video', 'audio', 'fps', 'atb', 'vtb');
 	} else {
@@ -2116,6 +2128,7 @@ sub parse {
 	my(@tokens)=();
 	my(@args);
 
+	push(@tokens, 'audio', '{') if($ARG{'audio-only'});
 	foreach(@_) {			#Pre-processor
 		s/^\s+//;
 		s/\s+$//;
@@ -2138,6 +2151,7 @@ sub parse {
 			push(@tokens, $_);
 		}
 	}
+	push(@tokens, '}') if($ARG{'audio-only'});
 	print "Tokens:\n '", join("' '", @tokens), "'\n\n" if($ARG{'debug'}>2);
 
 	foreach(@tokens) {		#Processor
@@ -2569,10 +2583,6 @@ sub map_outputs {
 	}
 
 	push(@program, '-map', $root->{'video'}) if($root->{'video'});
-	if($ARG{'audio-only'}) {
-		($JFH, $JUNK)=File::Temp::tempfile(SUFFIX => '.mp4');
-		push(@program, $JUNK);
-	}
 	push(@program, '-map', $root->{'audio'}) if($root->{'audio'});
 
 	return(@program);
@@ -2705,7 +2715,92 @@ L<mpv(1)> will be started to show the source clips used to create
 the video.  Note that none of the filters are applied, and so this
 is only partially useful.
 
+=head2 FORMAT
+
+When using the C<-S> or C<-format> command-line options, 
+output filenames can use format specifiers that will be substituted
+for meaningful content.  Format specifiers follow the rules of
+L<printf(1)>.
+
+=over 8
+
+=item %t
+
+The OUTPUT length time in seconds
+
+=item %T
+
+The OUTPUT length time in HHMMSS (without colons).
+
+=item %r
+
+A random number generated each time it is called.
+
+=item %H
+
+A hash of the L<ffmpeg(1)> command being run (a number that would change based
+on the command-line but be the same when it is the same).  Arguments which
+would not affect the L<ffmpeg(1)> command (e.g. debugging) have no effect on
+this number.  It is produced in hexidecimal.
+
+=item %Y
+
+Current year in C<YYYY> format.
+
+=item %M
+
+Current month in C<MM> format.
+
+=item %D
+
+Current day in C<DD> format.
+
+=item %h
+
+Current hour in C<hh> format.
+
+=item %m
+
+Currnt minute in C<mm> format.
+
+=item %s
+
+Current second in C<ss> format.
+
+=item %e
+
+The preferred B<clips> extension for this file.  Either mp4 or mp3
+for video and audio-only respectively.
+
+=back
+
 =cut
+
+if($ARG{'format'}) {
+	my(@time)=localtime(time());
+	print join(' ', @INPUTS, @FFPROGRAM), "\n\n";
+	my(%sub)=(
+		't'	=> ['d', FFUtils::time2secs(int($ROOT->{'length'}))],
+		'T'	=> ['d', FFUtils::secs2time(int($ROOT->{'length'}))],
+		'r'	=> ['d', rand(2**16)],
+		'H'	=> ['s', substr(Digest::MD5::md5_hex(@INPUTS, @FFPROGRAM), -8)],
+		'Y'	=> ['s', sprintf('%04d', $time[5]+1900)],
+		'M'	=> ['s', sprintf('%02d', $time[4]+1)],
+		'D'	=> ['s', sprintf('%02d', $time[3])],
+		'h'	=> ['s', sprintf('%02d', $time[2])],
+		'm'	=> ['s', sprintf('%02d', $time[1])],
+		's'	=> ['s', sprintf('%02d', $time[0])],
+		'e'	=> ['s', $ROOT->{'video'}?'mp4':'mp3'],
+	);
+
+	$sub{'T'}[1]=~s/://g;
+
+	foreach my $format (keys(%sub)) {
+		$DST=~s/%([\d.+-]*)(\w)/sprintf("%$1$sub{$2}[0]", $sub{$2}[1])/eg;
+	}
+
+	$DST=~s/%%/%/g;
+}
 
 if($DST=~m/^(mpv|preview|watch|-)$/i) {
 	if($ARG{'dry-run'}) {
@@ -2756,23 +2851,6 @@ L<Extending Functionality with a UserFile> above.
 =back
 
 =head1 NOTES
-
-There is an audio only C<-A> or C<-audio-only> option to running B<clips>
-even with video files.  It's worth noting that, to ensure all filters work
-properly (including complex ones) that B<clips> actually produces an
-entirely pathetic video file at less than one frame per second.  Then,
-promptly deletes that file before exiting.  This ensures that everything
-works, but is fast because of the absurdly, otherwise unusable, tiny
-frame rate.
-
-=cut
-
-if($ARG{'audio-only'}) {
-	close($JFH);
-	unlink($JUNK);
-}
-
-=pod
 
 Use C<mpv --osd-fractions> (or an equivalent) to show exact frame time
 specifications for finding the best offsets.  B<clips> can use fractional
