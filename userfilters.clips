@@ -3,7 +3,7 @@
 # clips user filter file
 #
 # This file contains personalized transitions and filters for
-# use with the `clips` video editor.
+# use with the "clips" command-line video creation tool.
 #
 # Appart from user defined macros, the following are provided to
 # each user filter by clips:
@@ -17,35 +17,41 @@
 #    e.g. `1/#{_F}` or `#{N}/2`
 #
 ###################################################################
-                   
-user:transition:r    radial
-user:transition:lcut custom:expr=A
-user:transition:jcut custom:expr=B
 
-user:audio:mute      mute                volume=0
-user:audio:cave      cave/D=1100         aecho=1:0.7:#{D}:0.7,\
-                                         aecho=0.8:0.6:#{D}:0.6,\
-                                         atrim=duration=#{_L}
+#USER TRANSITIONS:
+user:transition:r                 radial
+user:transition:lcut              custom:expr=A
+user:transition:jcut              custom:expr=B
 
-user:audio:afo       afo/N=0.5           afade=t=out:st=`#{_L}-#{N}`:\
-                                         d=#{N}:curve=cbr
-user:audio:afi       afi/N=0.5           afade=t=in:st=0:d=#{N}:curve=cbr
 
-user:audio:speech    speech/N            afftdn=nf=#{N},dialoguenhance,\
-                                         volume=2
-user:audio:roadnoise roadnoise/V=2/N=-25 afftdn=nf=#{N},highpass,lowpass,\
-                                         afwtdn,dialoguenhance,volume=#{V}
+#USER AUDIO FILTERS:
+user:audio:mute                   volume=0
 
-user:video:resize    resize/R            scale=#{R}
-user:video:gamma     gamma/N=0.8         eq=gamma=#{N}
-user:video:bblur     bblur/X=5/Y=5       avgblur=sizeX=#{X}:sizeY=#{Y}
+user:audio:cave/D=1100            aecho=1:0.7:#{D}:0.7,\
+                                  aecho=0.8:0.6:#{D}:0.6,\
+                                  atrim=duration=#{_L}
+
+user:audio:afo/N=0.5              afade=t=out:st=`#{_L}-#{N}`:d=#{N}:curve=cbr
+user:audio:afi/N=0.5              afade=t=in:st=0:d=#{N}:curve=cbr
+
+user:audio:speech/N               afftdn=nf=#{N},dialoguenhance,volume=2
+
+user:audio:roadnoise/V=2/N=-25    afftdn=nf=#{N},highpass,lowpass,afwtdn,\
+                                  dialoguenhance,volume=#{V}
+
+
+#USER VIDEO FILTERS:
+user:video:resize/R               scale=#{R}
+user:video:gamma/N=0.8            eq=gamma=#{N}
+user:video:bblur/X=5/Y=5          avgblur=sizeX=#{X}:sizeY=#{Y}
+
+#N.B. requires Vulkan drivers
+user:video:colorblind/T=m         libplacebo=cones=#{T}
 
 # Turn a 4K video into a stabilized 2K video
-user:video:ds4to2k_1 ds4to2k_1           deshake=rx=32:ry=24,\
-                                         crop=3200:1800:320:180,\
-                                         scale=2560:1440
+user:video:ds4to2k_1              deshake=rx=32:ry=24,crop=3200:1800:320:180,\
+                                  scale=2560:1440
 
-user:video:ds4to2k_2 ds4to2k_2           deshake=rx=64:ry=48,\
-                                         crop=3200:1800:320:180,\
-                                         scale=2560:1440
+user:video:ds4to2k_2              deshake=rx=64:ry=48,crop=3200:1800:320:180,\
+                                  scale=2560:1440
 

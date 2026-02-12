@@ -1987,8 +1987,8 @@ in the F<UserFile>.
 All non-blank lines not matching the following will cause errors:
 
         <#|;|//>[Comment text]
-        user:<audio|video>:<name>  <token>[/X=a][...]  <filtername>[=options]
-        user:transition:<key>      <xfade transition name>
+        user:<audio|video>:<token>[/X=a][...] <filtername>[=options][,...]
+        user:transition:<key>                 <xfade transition name>
 
 What this will do is create a simple audio or video filter type named C<token>.
 Optionally, C<token> can have options which are specified after.  These options
@@ -1997,8 +1997,8 @@ an equal (=) symbol.  After that comes the L<ffmpeg-filters(1)> filter that
 should be invoked in it's entirety.  Options (e.g. C<X>) above can be used
 in the definition using the syntax C<#{X}> within the definiton.
 
-Note, B<clips> provides following built-in macros which can be used within
-any user definition:
+Note, B<clips> provides the following built-in macros which can be used
+within any user definition:
 
 =over 8
 
@@ -2025,12 +2025,12 @@ number.
 
         # This is a comment about my awesome filters
 
-        user:audio:cave    cave/D=1000    aecho=0.5:0.4:#{D}:0.5
-        user:audio:speech  speech/N       afftdn=nf=#{N},dialoguenhance,\
-                                          volume=2
-        user:video:bblur   bblur/X=5/Y=5  avgblur=sizeX=#{X}:sizeY=#{Y}
+        user:audio:cave/D=1000    aecho=0.5:0.4:#{D}:0.5
+        user:audio:speech/N       afftdn=nf=#{N},dialoguenhance,\
+                                         volume=2
+        user:video:bblur/X=5/Y=5  avgblur=sizeX=#{X}:sizeY=#{Y}
 
-        user:transition:l  wipeleft
+        user:transition:l         wipeleft
 
 In this example, if a person specifies the token C<cave> the audio filter
 C<aecho=0.5:0.4:1000:0.5> will be applied to the next clip.  If they specify
@@ -2066,7 +2066,6 @@ sub ltrim {
 sub read_user_file {
 	my($file)=@_;
 	my($CONF)=IO::Handle->new;
-	my($id, $match, $macro);
 	local($_);
 
 	print "User Config:\n" if($ARG{'debug'}>5);
@@ -2086,8 +2085,9 @@ sub read_user_file {
 			if($ARG{'debug'}>5) {
 				printf(" User transition: %3s = %s\n\n", $1, $2);
 			}
-		} elsif(m|^(user:[videoau]+:\w+)\s+(\w+)/?(\S*)\s+(.+)$|i) {
-			($id, $name, $opts, $macro)=@{^CAPTURE};
+		} elsif(m{^user:(video|audio):(\w+)/?(\S*)\s+(.+)$}i) {
+			my($type, $name, $opts, $macro)=@{^CAPTURE};
+			my($id)=&fmt('user:%s:%s', $type, $name);
 
 			push(@ORDER, $id);
 			$UM{$id}=$name;
@@ -2753,7 +2753,7 @@ if($ARG{'print'}=~m/order/i || $ARG{'debug'}>3) {
 if($ARG{'print'}=~m/transition/i || $ARG{'debug'}>4) {
 	print "Transition Shortcut Keys:\n";
 	foreach my $key (sort(keys(%TRANSITION))) {
-		printf("%3s = %s\n", $key, $TRANSITION{$key});
+		printf("%8s = %s\n", $key, $TRANSITION{$key});
 	}
 	if($ARG{'print'}=~m/transition/i) {
 		exit(0);
@@ -2769,6 +2769,7 @@ if($ARG{'print'}=~m/font/i) {
 
 if($ARG{'print'}=~m/token/i || $ARG{'debug'}>2) {
 	print "Tokens:\n '", join("' '", @TOKENS), "'\n\n";
+	exit(0);
 }
 
 $ROOT=&parse(@TOKENS);

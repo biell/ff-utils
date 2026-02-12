@@ -97,7 +97,7 @@ wind.mp4:
 	clips $@ src/autumn-hd-10.mp4 0- /3/hlwind src/clouds-hd-39.mp4 0-10
 
 utran.mp4: tro.mp4
-	clips -F ../userfilters.clips $@ tro.mp4 0-4 /lcut 8-14
+	clips -U ../userfilters.clips $@ tro.mp4 0-4 /lcut 8-14
 
 hash-d76a611c.mp4: utran.mp4
 	clips -S hash-%H.%e utran.mp4 scale/2560:1440 0-
