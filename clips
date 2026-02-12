@@ -28,19 +28,19 @@ clips [options] <out.mp4|-> <in1.mp4> <clip1> [...]
 
 =over 8
 
-=item -0 <file>, -1 <file>, -2 <file>, ..., -9 <file>
+=item -0 <file>, -1 <file>, -2 <file>, ..., -99 <file>
 
-Numbers (only 0 through 9) can take a filename as an argument to create a
+Numbers (only 0 through 99) can take a filename as an argument to create a
 placeholder input file.  This placeholder can then be used to refer to a file.
 It is useful if you plan to alternate files a lot on your command-line.  When
 using this option, files can be referred to by their number using the
-placeholder syntax on the command-line:  C<[0]>, C<[1]>, ..., C<[9]>.  This
+placeholder syntax on the command-line:  C<[0]>, C<[1]>, ..., C<[99]>.  This
 will have the effect of substituting the actual filename in for that position.
 
 Note that this option and resulting syntax can be intermixed with the
 standard method of placing the filename on the command-line when it is
-to become named.  So, even though there are only 10 file name placeholders,
-using these options are not fully incompatible with complex command-lines.
+to become named.  Additionally, when used, the named file becomes the active
+one for the next clip segment specification.
 
 =item -title=<text>
 
@@ -165,6 +165,8 @@ values of C<string> are accepted:
 
 =item order    - print the order filters will be run
 
+=item tokens   - Print the tokenized filter inputs
+
 =item tree     - print only the data tree structure
 
 =item command  - print only the L<ffmpeg(1)> command
@@ -211,17 +213,18 @@ Print full manual.
 
 =cut
 
+my(@TOKENS)=();
+my(%ARG)=(
+	'overlay'			=> 33,
+	'transition'		=> 0.8,
+	'transition-type'	=> 'fade',
+	'fade'			=> 3,
+	'speed'			=> 1,
+	'volume'			=> 1,
+	'userfile'		=> $ENV{'CLIPS_USERFILE'},
+);
+
 my(@OPTIONS)=qw(
-	0=s
-	1=s
-	2=s
-	3=s
-	4=s
-	5=s
-	6=s
-	7=s
-	8=s
-	9=s
 	title=s
 	comment=s
 	description=s
@@ -248,28 +251,48 @@ my(@OPTIONS)=qw(
 	debug|verbose|d+
 	version|V
 	examples|example|e
-	help|h
+	help|?|h
 	manual|H
 );
-my(%ARG)=(
-	'overlay'			=> 33,
-	'transition'		=> 0.8,
-	'transition-type'	=> 'fade',
-	'fade'			=> 3,
-	'speed'			=> 1,
-	'volume'			=> 1,
-	'userfile'		=> $ENV{'CLIPS_USERFILE'},
+
+my(%OPTIONS)=(
+	'0=s'	=> sub {
+			$ARG{$_[0]}=$_[1];
+			push(@TOKENS, $_[1]);
+	},
+	'<>'	=> sub {	#This routine essentially doubles as the pre-processor
+			local($_)=@_;
+
+			if(m|^-.|) {
+				&err(2, 'Unrecognized command-line parameter:', $_);
+			} elsif(m|^}}+|) {
+				for(my $i=0; $i<length($_); $i++) {
+					push(@TOKENS, '}');
+				}
+			} elsif(m|^\[(\d+)(:[av])?\]\s*(.*)$|i) {
+				if($ARG{$1}) {
+					push(@TOKENS, $ARG{$1});
+				} else {
+					&err(12, "A placeholder was used without a reference:",
+						"'[$1]' has no corresponding '-$1'");
+				}
+				push(@TOKENS, 'audio') if(lc($2) eq ':a');
+				push(@TOKENS, 'volume/0') if(lc($2) eq ':v');
+				push(@TOKENS, $3) if($3);
+			} else {
+				push(@TOKENS, $_);
+			}
+	},
 );
+for my $opt (1 .. 99) {
+	$OPTIONS{"$opt=s"}=$OPTIONS{'0=s'};
+}
 
 s/^-(\w+):/-$1-/ foreach(@ARGV);	#Fixup for colons in options
 
-Getopt::Long::Configure('pass_through', 'bundling_override', 'ignore_case');
-unless(GetOptions(\%ARG, @OPTIONS)) {
+Getopt::Long::Configure('bundling_override');
+unless(GetOptions(\%ARG, @OPTIONS, %OPTIONS)) {
 	pod2usage(-verbose => 1, -exitval => 1);
-}
-
-if($ARGV[0]=~m/^-\w/) {
-	&err(2, 'Unrecognized command-line parameter:', $ARGV[0]);
 }
 
 $ARG{'print'}=join(',', @{$ARG{'print'}});
@@ -289,7 +312,7 @@ if($ARG{'print'}=~m/defaults/i || $ARG{'debug'}>4) {
 my(@MPV)=qw(mpv --osd-fractions --msg-level=cplayer=no,statusline=status);
 my(@WATCH)=();
 
-my($DST)=shift;
+my($DST)=shift(@TOKENS);
 my(%SOURCES)=();
 my($ROOT)=undef;
 my(@INPUTS)=();
@@ -302,6 +325,7 @@ if($ARG{'practice'}) {
 
 if($ARG{'audio-only'}) {
 	$ARG{'rate'}=0.1;
+	@TOKENS=('audio', '{', @TOKENS, '}');
 }
 
 if($ARG{'end'}) {
@@ -670,6 +694,18 @@ and hours.  In all cases, fractions are optional, but if you don't specify
 them, then ffmpeg will just select the closest frame (and that may not be
 what you want).
 
+=head2 Clip Format
+
+The Clip format is two B<Time Format> strings seperated by a hyphen (-)
+character.  This specifies the time range used to specify a clip.  This
+syntax is used throughout B<clips> for specifying video clip segments or
+to specify a duration based action.  If there is no time specified after
+the hyphen (-) character, then the end of the input video is used.
+
+For example, if you would like specify a video clip which occurs from
+the time 0:23.900 until the 1 minute mark, then you would use
+C<0:23.900-1:00>.
+
 =head2 Tokens
 
 After the output file is specified, each command-line argument is a token
@@ -769,13 +805,10 @@ or a suported L<ffmpeg-filters(1)> C<drawtext> formula followed by C<pt>
 
 =item duration
 
-By default, text will be positioned over the entire video segment.  To
-limit that, use this argument.  It should be a C<time> format, the same
-as a segment syntax.  Just like segments, a syntax like C<0:04.030-> would
-go form 4.030 seconds to the end of the video segment.  Note that this is
-based on the video stream, and not segment definition.  If you would like
-to display text in a video segment defined as C<1:03.390-4:34.960> for
-a period of 10 to 2 seconds prior to the end of the video segment, then
+By default, text will be positioned over the entire video segment.  To limit
+that, use this argument following the L<Clip Format> specification.  If you
+would like to display text in a video segment defined as C<1:03.390-4:34.960>
+for a period of 10 to 2 seconds prior to the end of the video segment, then
 the duration would be: C<3:41.630-3:39.630>.  This is necessary as text
 may be applied to composite video streams, and this is the only logically
 consistant way to specify times.
@@ -873,8 +906,14 @@ $F{'simple:video:text'}=sub {
 
 			$params{'x'}="w-text_w+$params{'x'}" if($params{'x'}<0);
 			$params{'y'}="h-text_h+$params{'y'}" if($params{'y'}<0);
+
+			#Support percentages for numbers:
+			$params{'w'}=~s|([\d.]+)%|(iw*$1/100)|g;
+			$params{'h'}=~s|([\d.]+)%|(ih*$1/100)|g;
+			$params{'x'}=~s|([\d.]+)%|(iw*$1/100)|g;
+			$params{'y'}=~s|([\d.]+)%|(ih*$1/100)|g;
 		} else {
-			&err(11, 'drawtext argument not understood:', $_);
+			&err(15, 'drawtext argument not understood:', $_);
 		}
 	}
 
@@ -884,6 +923,107 @@ $F{'simple:video:text'}=sub {
 	$drawtext.=sprintf("text='%s'", $text);
 
 	return($drawtext);
+};
+
+=item box[/color][/duration][/#px|fill]</W:H:X:Y>
+
+Draw a box over the image using the L<ffmpeg-filters(1)> C<drawbox> routine.
+See the manual for more information on how this filter can be used, and
+which variable names may be used in defining C<W>, C<H>, C<X>, and C<Y>.
+Color, duration, and border may be specified in any order.
+
+=over 8
+
+=item color
+
+The Color may be specified either in the hexidecimal C<#000000> or using
+standard color names listed in L<ffmpeg-utils(1)>.  After the color name
+or number, an at symbol (@) may come with a number between C<0> and
+C<1> to specify the alpha component.  Following normal convention, C<0>
+is fully transparent and C<1> is solid.  Additionally, the hexidecmal
+notation may contain 8 numbers, with the last two specifying the alpha
+using standard hexidecimal color notation.  A Solid color C<Black> is
+the default color.
+
+=item duration
+
+By default, text will be positioned over the entire video segment.  To
+limit that, use this argument.  Use the L<Clip Format> syntax and see
+the L<duration> description for the C<text> token for more information
+on how best to use this argument.
+
+=item border
+
+This can be (1) a number followed by the string C<px> for pixels in
+thickness of the box border line.  Or, (2) it can be the keyword C<fill>
+to create a solid box.  Note that C<fill> is the default.
+
+=item W:H:X:Y
+
+This argument must be last and is mandatory.  Specify the Width, Height,
+X offset, and Y offset respectively.  Note that these can be numbers,
+percentages, or calculations.  See L<ffmpeg-filters(1)> for more information.
+Or, you can use one of six nemonics:  C<left>, C<middle>, C<right> and
+C<top>, C<center>, C<bottom> to look like C<bottom:right> for C<X> and C<Y>.
+
+=back
+
+=cut
+
+$M{'simple:video:box'}='box/?(.*)/(.*)';
+$F{'simple:video:box'}=sub {
+	my($node, $args, $geom)=@_;
+	my(%coords)=(
+		'top'	=> '0',
+		'center'	=> '(ih-h)/2',
+		'bottom'	=> 'ih-h',
+		'left'	=> '0',
+		'middle'	=> '(iw-w)/2',
+		'right'	=> 'iw-w',
+	);
+	my(%params)=(
+		'c'		=> 'black',
+		't'		=> 'fill',
+	);
+	my(@drawbox)=();
+
+	foreach(split(m|/+|, $args)) {
+		if(m/^(#[\da-f@]{6,8}|[a-z]+@[\d.]+|[a-z]+)$/i) {
+			$params{'c'}=$1;
+		} elsif(m/^fill/i) {
+			$params{'t'}='fill';
+		} elsif(m/^([\d.]+)px$/i) {
+			$params{'t'}=$1;
+		} elsif(m/^([\d.:]+)-([\d.:]+)?$/) {
+			$params{'enable'}=&fmt('between(t,%f,%f)',
+				FFUtils::time2secs($1),
+				FFUtils::time2secs($2 // $node->{'length'}));
+		} else {
+			&err(15, 'box argument not understood:', $_);
+		}
+	}
+
+	$geom=~s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|($1)/($2)|g;
+	@params{'w', 'h', 'x', 'y'}=split(m/:/, $geom);
+	$params{'x'}=$coords{$params{'x'}} if(exists($coords{$params{'x'}}));
+	$params{'y'}=$coords{$params{'y'}} if(exists($coords{$params{'y'}}));
+
+	#Support percentages for numbers:
+	$params{'w'}=~s|([\d.]+)%|(iw*$1/100)|g;
+	$params{'h'}=~s|([\d.]+)%|(ih*$1/100)|g;
+	$params{'x'}=~s|([\d.]+)%|(iw*$1/100)|g;
+	$params{'y'}=~s|([\d.]+)%|(ih*$1/100)|g;
+
+	$params{'w'}=~s/^-/iw-/;
+	$params{'h'}=~s/^-/ih-/;
+	$params{'x'}=~s/^-/iw-w-/;
+	$params{'y'}=~s/^-/ih-h-/;
+
+	foreach my $key (sort(keys(%params))) {
+		push(@drawbox, join('=', $key, $params{$key})) if($key);
+	}
+
+	return(&fmt("drawbox='%s'", join(':', @drawbox)));
 };
 
 =item crop/W:H:X:Y
@@ -1179,7 +1319,7 @@ $F{'complex:audio'}=sub {
 	my($node)=@_;
 	my(@audio)=();
 
-	if($node->{'tree'}[0]{'video'}) {
+	if($node->{'tree'}[0]{'video'}=~m/\[v[\d.]+\]/) {
 		push(@audio, &fmt('#{I}nullsink', {
 				'I'	=> $node->{'tree'}[0]{'video'},
 		}));
@@ -1826,6 +1966,7 @@ my(@ORDER)=qw(
 	simple:video:fps
 	simple:video:tb
 	simple:video:text
+	simple:video:box
 	simple:video:crop
 	simple:video:scale
 	simple:video:flip
@@ -2125,36 +2266,9 @@ sub parse {
 	my(%filt)=();
 	my($src)=undef;
 	my($stream)=0;
-	my(@tokens)=();
 	my(@args);
 
-	push(@tokens, 'audio', '{') if($ARG{'audio-only'});
-	foreach(@_) {			#Pre-processor
-		s/^\s+//;
-		s/\s+$//;
-
-		if(m|^}}+|) {
-			for(my $i=0; $i<length($_); $i++) {
-				push(@tokens, '}');
-			}
-		} elsif(m|^\[(\d)(:[av])?\]\s*(.*)$|i) {
-			if($ARG{$1}) {
-				push(@tokens, $ARG{$1});
-			} else {
-				&err(12, "A placeholder was used without a reference:",
-					"'[$1]' has no corresponding '-$1'");
-			}
-			push(@tokens, 'audio') if(lc($2) eq ':a');
-			push(@tokens, 'volume/0') if(lc($2) eq ':v');
-			push(@tokens, $3) if($3);
-		} else {
-			push(@tokens, $_);
-		}
-	}
-	push(@tokens, '}') if($ARG{'audio-only'});
-	print "Tokens:\n '", join("' '", @tokens), "'\n\n" if($ARG{'debug'}>2);
-
-	foreach(@tokens) {		#Processor
+	foreach(@_) {		#Processor
 		if(-f $_) {
 			$src=$_;
 			$SOURCES{$src}={
@@ -2653,7 +2767,11 @@ if($ARG{'print'}=~m/font/i) {
 	exit(0);
 }
 
-$ROOT=&parse(@ARGV);
+if($ARG{'print'}=~m/token/i || $ARG{'debug'}>2) {
+	print "Tokens:\n '", join("' '", @TOKENS), "'\n\n";
+}
+
+$ROOT=&parse(@TOKENS);
 &compute_lengths($ROOT);
 
 push(@FFPROGRAM, &map_outputs($ROOT));
@@ -2741,7 +2859,9 @@ A random number generated each time it is called.
 A hash of the L<ffmpeg(1)> command being run (a number that would change based
 on the command-line but be the same when it is the same).  Arguments which
 would not affect the L<ffmpeg(1)> command (e.g. debugging) have no effect on
-this number.  It is produced in hexidecimal.
+this number.  It is produced in hexidecimal.  Please note that this hash
+could change from version to version of B<clips> as the underlying code
+which builds the command changes.
 
 =item %Y
 
@@ -3026,6 +3146,10 @@ An incorrect number of clips were provided to an C<xstack> group.
 
 An attempt was made to transition two clips where one has only audio
 and another has both audio and video.
+
+=item Z<>15
+
+A token was provided with an unkown argument.
 
 =item Z<>100
 
