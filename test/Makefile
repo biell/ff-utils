@@ -2,7 +2,7 @@
 
 TESTS = concat-4k grid1 grid2 overlay-4k simple fade transition mirror tro \
 		groovy passthrough tteffect1 tteffect2 carousel blur three text \
-		clipings wind utran hash-d76a611c
+		clipings wind utran hash-d76a611c box
 
 all: font novideo.mp3 $(addsuffix .mp4, $(TESTS))
 	@echo
@@ -101,6 +101,10 @@ utran.mp4: tro.mp4
 
 hash-d76a611c.mp4: utran.mp4
 	clips -S hash-%H.%e utran.mp4 scale/2560:1440 0-
+
+box.mp4:
+	clips $@ src/rca-720-30.mp4 \
+		box/10px/#4444eecc/2-8/57%:67%:middle:center 0-10
 
 novideo.mp3:
 	clips -A $@ src/river-hd-10.mp4 0- / src/rca-720-30.mp4 0-

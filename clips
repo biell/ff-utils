@@ -214,6 +214,7 @@ Print full manual.
 =cut
 
 my(@TOKENS)=();
+my($DST)=undef;
 my(%ARG)=(
 	'overlay'			=> 33,
 	'transition'		=> 0.8,
@@ -239,7 +240,6 @@ my(@OPTIONS)=qw(
 	rout|r-out|res-out|resolution-out=s
 	rin|r-in|res-in|resolution-in=s
 	rate|framerate|frame-rate|fps|R=f
-	font|F=s
 	format|substitute|sub|S
 	audio-only|A
 	practice|P
@@ -256,9 +256,12 @@ my(@OPTIONS)=qw(
 );
 
 my(%OPTIONS)=(
-	'0=s'	=> sub {
+	'0=s' => sub {
 			$ARG{$_[0]}=$_[1];
 			push(@TOKENS, $_[1]);
+	},
+	'font|F=s' => sub {
+		push(@TOKENS, join('/', 'font', $_[1]));
 	},
 	'<>'	=> sub {	#This routine essentially doubles as the pre-processor
 			local($_)=@_;
@@ -279,6 +282,8 @@ my(%OPTIONS)=(
 				push(@TOKENS, 'audio') if(lc($2) eq ':a');
 				push(@TOKENS, 'volume/0') if(lc($2) eq ':v');
 				push(@TOKENS, $3) if($3);
+			} elsif(!$DST) {
+				$DST=$_;
 			} else {
 				push(@TOKENS, $_);
 			}
@@ -312,7 +317,6 @@ if($ARG{'print'}=~m/defaults/i || $ARG{'debug'}>4) {
 my(@MPV)=qw(mpv --osd-fractions --msg-level=cplayer=no,statusline=status);
 my(@WATCH)=();
 
-my($DST)=shift(@TOKENS);
 my(%SOURCES)=();
 my($ROOT)=undef;
 my(@INPUTS)=();
@@ -545,11 +549,22 @@ sub fc_search {
 
 sub find_font {
 	my($font)=join(' ', @_);
+	my($exts)=join('|', qw(ttf otf eot svg fnt bdf pfa pfb));
+	my($locate)='/usr/bin/locate';
 	my(@matches);
 	my(%fonts);
 
-	if(-r $font) {
+	if(-f $font) {
 		return($font, undef);
+	} elsif(-f '/'.$font) {
+		return('/'.$font, undef);
+	} elsif($font=~m/\.($exts)$/i && -x $locate) {
+		foreach my $file (`$locate "$font"`) {
+			chomp($file);
+			if(-f $file) {
+				return($file, $font);
+			}
+		}
 	} elsif($font) {
 		%fonts=&fc_search($font);
 
@@ -869,9 +884,8 @@ $F{'simple:video:text'}=sub {
 		'y'			=> $coords{'center'},
 	);
 
-	if($ARG{'font'}) {
-		($params{'fontfile'}, $params{'font'})=&find_font($ARG{'font'});
-	}
+	$params{'font'}=$node->{'font'} if($node->{'font'});
+	$params{'fontfile'}=$node->{'fontfile'} if($node->{'fontfile'});
 
 	foreach(split(m|(?<!\\)/|, $args)) {
 		s|\\+/|/|g;
@@ -1078,8 +1092,11 @@ don't match the first video's resolution.
 
 The final thing to note about B<clips>' C<scale> token is that it respects
 the original aspect ratio by default, adding black bars if necessary to match
-the requested dimensions without altering the aspect ratio.  Place a
-C</fill> string at the end of the token to disable this feature, use
+the requested dimensions without altering the aspect ratio.  This is contrary
+to autoscaling within groups which does not respect aspect ratio.  So, the
+default here is to act opposite of autoscaling.  If you need to use scale
+in a place where you want it to stretch, then place a C</fill> string
+at the end of the token to disable the padding feature.  Use
 C<ffmpeg/v/scale> to call L<ffmpeg(1)>'s scale in an unintelligent way,
 or see the C<resize> configuration in the example user filter file which
 performs an exact user-specified scale operation regardless of how they
@@ -1516,7 +1533,18 @@ $F{'complex:transition'}=sub {
 				'T'	=> $l->{'vtb'},
 				'O'	=> $vr_tmp,
 			}));
-			$r->{'video'}=$vr_tmp;
+		$r->{'video'}=$vr_tmp;
+	}
+
+	if($l->{'width'} != $r->{'width'} || $l->{'height'} != $r->{'height'}) {
+		my($vs_tmp)=&next_labels($r, 'video' => 1);
+		push(@fade, &fmt('#{I}scale=#{W}:#{H}#{O}', {
+				'I'	=> $r->{'video'},
+				'W'	=> $l->{'width'},
+				'H'	=> $l->{'height'},
+				'O'	=> $vs_tmp,
+			}));
+		$r->{'video'}=$vs_tmp;
 	}
 
 	push(@fade,
@@ -1709,6 +1737,17 @@ $F{'group:concat'}=sub {
 		'width', 'height', 'fps', 'atb', 'vtb');
 
 	foreach my $child (@{$node->{'tree'}}) {
+		if($node->{'width'} != $child->{'width'} || $node->{'height'} != $child->{'height'}) {
+			my($vs_tmp)=&next_labels($child, 'video' => 1);
+			push(@concat, &fmt('#{I}scale=#{W}:#{H}#{O}', {
+					'I'	=> $child->{'video'},
+					'W'	=> $node->{'width'},
+					'H'	=> $node->{'height'},
+					'O'	=> $vs_tmp,
+				}));
+			$child->{'video'}=$vs_tmp;
+		}
+
 		if($child->{'video'}) {
 			push(@inputs, $child->{'video'});
 			$v++;
@@ -1873,6 +1912,7 @@ $F{'group:aoverlay'}=sub {
 	my($node)=@_;
 	my($vout, $aout)=&next_labels($node);
 	my(@ain)=();
+	my(@overlay)=();
 
 	&copykeys($node->{'tree'}[0] => $node,
 		'video', 'width', 'height', 'fps', 'atb', 'vtb');
@@ -1880,14 +1920,22 @@ $F{'group:aoverlay'}=sub {
 
 	foreach my $child (@{$node->{'tree'}}) {
 		push(@ain, $child->{'audio'});
+
+		if($child != $node->{'tree'}[0] && $child->{'video'}) {
+			push(@overlay, &fmt('#{I}nullsink', {
+					'I'	=> $child->{'video'},
+				}));
+		}
 	}
 
-	return(&fmt('#{Is}amix=inputs=#{N}:duration=#{D}#{O}', {
+	push(@overlay, &fmt('#{Is}amix=inputs=#{N}:duration=#{D}#{O}', {
 			'Is'	=> join('', @ain),
 			'N'	=> scalar(@ain),
 			'D'	=> 'first',
 			'O'	=> $node->{'audio'},
 		}));
+
+	return(@overlay);
 };
 
 =item ffmpeg/<v|a>/<filter>
@@ -2281,6 +2329,8 @@ sub parse {
 				'video'	=> FFUtils::has_video($src),
 				'audio'	=> FFUtils::has_audio($src),
 			};
+		} elsif(@args=m|^font/(.*)$|i) {
+			($ARG{'fontfile'}, $ARG{'font'})=&find_font($args[0]);
 		} elsif(@args=m|^$M{'complex:fade'}|i) {
 			my($node)=&node(
 				'type'			=> 'complex',
@@ -2422,6 +2472,8 @@ sub parse {
 
 			#Place the first video file first to help compute length:
 			if($cur->{'merge'} eq 'a') {
+				my($rest);
+
 				for(my $i=0; $i<@{$cur->{'tree'}}; $i++) {
 					if($cur->{'tree'}[$i]{'complex:audio'}) {
 						next;
@@ -2429,11 +2481,13 @@ sub parse {
 					if($cur->{'tree'}[$i]{'type'} eq 'complex') {
 						unshift(@{$cur->{'tree'}},
 							splice(@{$cur->{'tree'}}, $i, 1));
+						$rest=$i+1;
 						last;
 					}
 					if($SOURCES{$cur->{'tree'}[$i]{'file'}}{'video'}) {
 						unshift(@{$cur->{'tree'}},
 							splice(@{$cur->{'tree'}}, $i, 1));
+						$rest=$i+1;
 						last;
 					}
 				}
@@ -2545,6 +2599,12 @@ sub parse {
 			foreach my $simple (grep(m/^simple:/, @ORDER)) {
 				if(@args=m|^$M{$simple}|i) {
 					push(@{$filt{$simple}}, [ @args ]);
+
+					if($simple eq 'simple:video:text') {
+						$filt{'font'}=$ARG{'font'};
+						$filt{'fontfile'}=$ARG{'fontfile'};
+					}
+
 					$found=1;
 				}
 			}
@@ -2767,7 +2827,7 @@ if($ARG{'print'}=~m/font/i) {
 	exit(0);
 }
 
-if($ARG{'print'}=~m/token/i || $ARG{'debug'}>2) {
+if($ARG{'print'}=~m/token/i) {
 	print "Tokens:\n '", join("' '", @TOKENS), "'\n\n";
 	exit(0);
 }
