@@ -2331,6 +2331,11 @@ sub parse {
 			};
 		} elsif(@args=m|^font/(.*)$|i) {
 			($ARG{'fontfile'}, $ARG{'font'})=&find_font($args[0]);
+
+			if($ARG{'print'}=~m/font/i) {
+				&print_fonts($ARG{'font'});
+				exit(0);
+			}
 		} elsif(@args=m|^$M{'complex:fade'}|i) {
 			my($node)=&node(
 				'type'			=> 'complex',
@@ -2822,10 +2827,6 @@ if($ARG{'print'}=~m/transition/i || $ARG{'debug'}>4) {
 	}
 }
 
-if($ARG{'print'}=~m/font/i) {
-	&print_fonts($ARG{'font'});
-	exit(0);
-}
 
 if($ARG{'print'}=~m/token/i) {
 	print "Tokens:\n '", join("' '", @TOKENS), "'\n\n";
