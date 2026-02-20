@@ -1762,7 +1762,8 @@ $F{'group:concat'}=sub {
 		&copykeys($node->{'tree'}[0] => $node,
 			'video', 'audio', 'fps', 'atb', 'vtb');
 	} else {
-		($node->{'video'}, $node->{'audio'})=&next_labels($node);
+		($node->{'video'})=&next_labels($node, 'video' => 1) if($v);
+		($node->{'audio'})=&next_labels($node, 'audio' => 1) if($a);
 
 		push(@concat, &fmt('#{Is}concat=n=#{N}:v=#{V}:a=#{A}#{Ov}#{Oa}', {
 				'Is'	=> join('', @inputs),
