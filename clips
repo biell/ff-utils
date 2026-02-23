@@ -836,8 +836,8 @@ C<100:100>, to using negative numbers to specify distance from other edges
 (e.g. C<10,-10> would make the bottom left corner of the text box be 10
 pixels from the left side and 10 pixels up from the bottom of the image).
 
-Or, you can use one of six nemonics:  C<left>, C<middle>, C<right> and
-C<top>, C<center>, C<bottom> to look like C<bottom:right>.
+Or, you can use one of six nemonics:  C<left>, C<center>, C<right> and
+C<top>, C<middle>, C<bottom> to look like C<bottom:right>.
 
 Lastly, you have pretty much full access to the L<ffmpeg-filters(1)>
 drawtext C<x=> and C<y=> parameters (which includes the ability to move
@@ -871,17 +871,17 @@ $F{'simple:video:text'}=sub {
 	my($drawtext)='drawtext=';
 	my(%coords)=(
 		'top'	=> 'h*0.01',
-		'center'	=> '(h-text_h)/2',
+		'middle'	=> '(h-text_h)/2',
 		'bottom'	=> 'h*0.99-text_h',
 		'left'	=> 'w*0.01',
-		'middle'	=> '(w-text_w)/2',
+		'center'	=> '(w-text_w)/2',
 		'right'	=> 'w*0.99-text_w',
 	);
 	my(%params)=(
 		'fontcolor'	=> 'black@0.9',
 		'fontsize'	=> 'h/8',
-		'x'			=> $coords{'middle'},
-		'y'			=> $coords{'center'},
+		'x'			=> $coords{'center'},
+		'y'			=> $coords{'middle'},
 	);
 
 	$params{'font'}=$node->{'font'} if($node->{'font'});
@@ -977,8 +977,8 @@ to create a solid box.  Note that C<fill> is the default.
 This argument must be last and is mandatory.  Specify the Width, Height,
 X offset, and Y offset respectively.  Note that these can be numbers,
 percentages, or calculations.  See L<ffmpeg-filters(1)> for more information.
-Or, you can use one of six nemonics:  C<left>, C<middle>, C<right> and
-C<top>, C<center>, C<bottom> to look like C<bottom:right> for C<X> and C<Y>.
+Or, you can use one of six nemonics:  C<left>, C<center>, C<right> and
+C<top>, C<middle>, C<bottom> to look like C<bottom:right> for C<X> and C<Y>.
 
 =back
 
@@ -989,10 +989,10 @@ $F{'simple:video:box'}=sub {
 	my($node, $args, $geom)=@_;
 	my(%coords)=(
 		'top'	=> '0',
-		'center'	=> '(ih-h)/2',
+		'middle'	=> '(ih-h)/2',
 		'bottom'	=> 'ih-h',
 		'left'	=> '0',
-		'middle'	=> '(iw-w)/2',
+		'center'	=> '(iw-w)/2',
 		'right'	=> 'iw-w',
 	);
 	my(%params)=(
@@ -1584,8 +1584,8 @@ together.
 If C<option> is of the form X:Y or XxY, then these will be the C<X> and C<Y>
 coordinates of the top left corner of the overlayed image.  This really only
 makes sense if the overlayed (left) image is smaller.  Additionally,
-the keywords C<left>, C<middle>, and C<right> may be used for the C<X>
-coordinate and C<top>, C<center>, and C<bottom> may be used for the C<Y>
+the keywords C<left>, C<center>, and C<right> may be used for the C<X>
+coordinate and C<top>, C<middle>, and C<bottom> may be used for the C<Y>
 coordinate.
 
 Any other C<option> will be treated as an attempt to specify a color to
@@ -1620,10 +1620,10 @@ $F{'complex:overlay'}=sub {
 	my($vatop)=&next_labels($node, 'video' => 1);
 	my(%coords)=(
 		'top'	=> '0',
-		'center'	=> '(H-h)/2',
+		'middle'	=> '(H-h)/2',
 		'bottom'	=> 'H-h',
 		'left'	=> '0',
-		'middle'	=> '(W-w)/2',
+		'center'	=> '(W-w)/2',
 		'right'	=> 'W-w',
 	);
 	my(@overlay)=();
@@ -1724,6 +1724,10 @@ The default action to commit against a group is to concatenate each clip
 serially.  Optionally, you can provide a C<c> option (e.g. C<{/c> ) to
 the brace, but this is the default action and unnecessary.
 
+Note that the first clip in a group is really important.  Video and audio
+defaults are matched to the first clip, including auto-scaling.  Also,
+if your first clip is missing audio or video, then so will the entire group.
+
 =cut
 
 $M{'group:concat'}='{/?c?';
@@ -1734,9 +1738,30 @@ $F{'group:concat'}=sub {
 	my(@concat)=();
 
 	&copykeys($node->{'tree'}[0] => $node,
-		'width', 'height', 'fps', 'atb', 'vtb');
+		'video', 'audio', 'width', 'height', 'fps', 'atb', 'vtb');
 
 	foreach my $child (@{$node->{'tree'}}) {
+		if($node->{'audio'} && !$child->{'audio'}) {
+			$child->{'audio'}=&next_labels($child, 'audio' => 1);
+
+			push(@concat, &fmt('anullsrc=d=#{L}#{O}', {
+					'L'	=> $child->{'length'},
+					'O'	=> $child->{'audio'},
+				}));
+		} elsif($node->{'video'} && !$child->{'video'}) {
+			$child->{'video'}=&next_labels($child, 'video' => 1);
+			$child->{'width'}=$node->{'width'};
+			$child->{'height'}=$node->{'height'};
+
+			push(@concat, &fmt('nullsrc=s=#{W}x#{H}:d=#{L}:c=#{C}#{O}', {
+					'W'	=> $child->{'width'},
+					'H'	=> $child->{'height'},
+					'L'	=> $child->{'length'},
+					'C'	=> 'black',
+					'O'	=> $child->{'video'},
+				}));
+		}
+
 		if($node->{'width'} != $child->{'width'} || $node->{'height'} != $child->{'height'}) {
 			my($vs_tmp)=&next_labels($child, 'video' => 1);
 			push(@concat, &fmt('#{I}scale=#{W}:#{H}#{O}', {
@@ -1758,10 +1783,7 @@ $F{'group:concat'}=sub {
 		}
 	}
 
-	if($v<2 && $a<2) {
-		&copykeys($node->{'tree'}[0] => $node,
-			'video', 'audio', 'fps', 'atb', 'vtb');
-	} else {
+	if($v>1 && $a>1) {
 		($node->{'video'})=&next_labels($node, 'video' => 1) if($v);
 		($node->{'audio'})=&next_labels($node, 'audio' => 1) if($a);
 
@@ -2334,7 +2356,7 @@ sub parse {
 			($ARG{'fontfile'}, $ARG{'font'})=&find_font($args[0]);
 
 			if($ARG{'print'}=~m/font/i) {
-				&print_fonts($ARG{'font'});
+				&print_fonts($args[0]);
 				exit(0);
 			}
 		} elsif(@args=m|^$M{'complex:fade'}|i) {
