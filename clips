@@ -1773,19 +1773,19 @@ $F{'group:concat'}=sub {
 			$child->{'video'}=$vs_tmp;
 		}
 
-		if($child->{'video'}) {
+		if($node->{'video'} && $child->{'video'}) {
 			push(@inputs, $child->{'video'});
 			$v++;
 		}
-		if($child->{'audio'}) {
+		if($node->{'audio'} && $child->{'audio'}) {
 			push(@inputs, $child->{'audio'});
 			$a++;
 		}
 	}
 
-	if($v>1 && $a>1) {
-		($node->{'video'})=&next_labels($node, 'video' => 1) if($v);
-		($node->{'audio'})=&next_labels($node, 'audio' => 1) if($a);
+	if($v>1 || $a>1) {
+		($node->{'video'})=&next_labels($node, 'video' => 1) if($v>1);
+		($node->{'audio'})=&next_labels($node, 'audio' => 1) if($a>1);
 
 		push(@concat, &fmt('#{Is}concat=n=#{N}:v=#{V}:a=#{A}#{Ov}#{Oa}', {
 				'Is'	=> join('', @inputs),
@@ -1942,21 +1942,25 @@ $F{'group:aoverlay'}=sub {
 	$node->{'audio'}=$aout;
 
 	foreach my $child (@{$node->{'tree'}}) {
-		push(@ain, $child->{'audio'});
+		push(@ain, $child->{'audio'}) if($child->{'audio'});
 
 		if($child != $node->{'tree'}[0] && $child->{'video'}) {
 			push(@overlay, &fmt('#{I}nullsink', {
 					'I'	=> $child->{'video'},
-				}));
+				})) if($child->{'video'}=~m/\[v\d+\.\d+\]/);
 		}
 	}
 
-	push(@overlay, &fmt('#{Is}amix=inputs=#{N}:duration=#{D}#{O}', {
-			'Is'	=> join('', @ain),
-			'N'	=> scalar(@ain),
-			'D'	=> 'first',
-			'O'	=> $node->{'audio'},
-		}));
+	if(@ain>1) {
+		push(@overlay, &fmt('#{Is}amix=inputs=#{N}:duration=#{D}#{O}', {
+				'Is'	=> join('', @ain),
+				'N'	=> scalar(@ain),
+				'D'	=> 'first',
+				'O'	=> $node->{'audio'},
+			}));
+	} else {
+		$node->{'audio'}=shift(@ain);
+	}
 
 	return(@overlay);
 };
