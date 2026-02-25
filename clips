@@ -1655,13 +1655,21 @@ $F{'complex:overlay'}=sub {
 		}
 	}
 
-	push(@overlay,
-		&fmt('#{Ib}#{It}amix=inputs=2:duration=shortest#{O}', {
-				'Ib'	=> $main->{'audio'},
-				'It'	=> $over->{'audio'},
-				'O'	=> $node->{'audio'},
-		}),
-	);
+	if($main->{'audio'} && $over->{'audio'}) {
+		push(@overlay,
+			&fmt('#{Ib}#{It}amix=inputs=2:duration=shortest#{O}', {
+					'Ib'	=> $main->{'audio'},
+					'It'	=> $over->{'audio'},
+					'O'	=> $node->{'audio'},
+			}),
+		);
+	} elsif($main->{'audio'}) {
+		$node->{'audio'}=$main->{'audio'};
+	} elsif($over->{'audio'}) {
+		$node->{'audio'}=$over->{'audio'};
+	} else {
+		$node->{'audio'}=undef;
+	}
 
 	if($color) {
 		push(@overlay,
@@ -1742,14 +1750,14 @@ $F{'group:concat'}=sub {
 
 	foreach my $child (@{$node->{'tree'}}) {
 		if($node->{'audio'} && !$child->{'audio'}) {
-			$child->{'audio'}=&next_labels($child, 'audio' => 1);
+			($child->{'audio'})=&next_labels($child, 'audio' => 1);
 
 			push(@concat, &fmt('anullsrc=d=#{L}#{O}', {
 					'L'	=> $child->{'length'},
 					'O'	=> $child->{'audio'},
 				}));
 		} elsif($node->{'video'} && !$child->{'video'}) {
-			$child->{'video'}=&next_labels($child, 'video' => 1);
+			($child->{'video'})=&next_labels($child, 'video' => 1);
 			$child->{'width'}=$node->{'width'};
 			$child->{'height'}=$node->{'height'};
 
