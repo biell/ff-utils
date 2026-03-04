@@ -421,7 +421,7 @@ sub err {
 	exit($code);
 }
 
-#fmt takes an extended `sprintf` string with pound-sign (#) style macros.
+#fmt takes an extended `sprintf` string with pound-sign C<#> style macros.
 #These are substituted in first IF the second argument is a hash ref which
 #contains a map of those macros.  After (and otherwise) a normal sprintf
 #is run on remaining arguments (if any).
@@ -441,8 +441,8 @@ sub fmt {
 	}
 
 	if(@_) {
+		$fmt=~s/(?<![%\\])%f/%g/g;
 		$out=sprintf($fmt, @_);
-		$out=~s/(\d+\.\d{6})/$1+0/eg; #Even if fails, number is still valid
 		$out=~s|`([\d.*/+-]+)`|eval($1)|eg;
 		return($out);
 	} else {
@@ -699,6 +699,95 @@ my(%TRANSITION)=(
 );
 
 
+=head2 Calculated Coordinates
+
+B<clips> supports a calculated coordinates syntax for some of its tokens.
+This syntax allows for specifying width, height, X, and Y dimensions using
+mnemonics and calculations.
+
+In the simplest form, the top left corner of the region in the video that
+is being targeted as two numbers specifying an X and Y offset from the
+top left corner of the input video.  Additionally, any tokens
+which support calculated coordinates are using features of the underlying
+L<ffmpeg-filters> capabilities.  All of these features are available as
+a direct pass-through.  Beyond that, B<clips> extends these capabilities
+with the following:
+
+=over 8
+
+=item left, center, right
+
+For a horizontal coordinate, these mnemonics can be used to specify the
+general position in the video that aligns with the word.  Note that
+each token has its own control over these meanings.  For example, specifying
+C<left> with the C<text> token will bind the left side of the text box
+to 1% of the video size away from the far left (0) edge, whereas most
+tokens will code left as 0.
+
+=item top, middle, bottom
+
+These work the same as the horizontal cordinates, but for the vertical plane.
+
+=item #%
+
+Specifying a number (possibly with a decimal point) with a percent sign C<%>
+afterwards will calculate that much percentage of the video.  For example,
+C<50%> would constitute middle of the video.
+
+=item -#
+
+If a negative number is supplied, as a calculated coordinate it will be
+calculated as an offset from the right or bottom of the video, depending
+on the plane.
+
+=item div(#,#) and #\/#
+
+Since B<clips> tokens use the slash C</> character as a seperation character
+for arguments, using division in within a calculated field requires attention.
+To support this, two methods are made available to the user, the first is
+a functional style division whereby the numerator is the first argument
+to a C<div> function, and the divisor is the second.  Alternatively, you
+can place a backslash C<\> character before the division symbol, and it
+will not be seen as a seperation character.  Both methods work equally,
+and there is no preference within the software.
+
+=back
+
+=cut
+
+sub calc {
+	local($_)=shift;
+	my($max, %hash)=@_;
+
+	$max=~s/^([xwyh])/\L$1/i;
+
+	$hash{'left'}=0				unless(exists($hash{'left'}));
+	$hash{'top'}=0					unless(exists($hash{'top'}));
+	$hash{'right'}=$hash{$max}		unless(exists($hash{'right'}));
+	$hash{'bottom'}=$hash{$max}		unless(exists($hash{'bottom'}));
+	$hash{'middle'}="($hash{$max})/2"	unless(exists($hash{'middle'}));
+	$hash{'center'}="($hash{$max})/2"	unless(exists($hash{'center'}));
+
+	if($max eq 'x' && m/middle/i && $hash{'center'}) {
+		$_=$hash{'center'};
+	} elsif($max eq 'y' && m/center/i && $hash{'middle'}) {
+		$_=$hash{'middle'};
+	} elsif($hash{$_}) {
+		$_=$hash{$_};
+	} elsif($hash{lc($_)}) {
+		$_=$hash{lc($_)};
+	}
+
+	s|\\+/|/|g;
+	s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|($1)/($2)|g;
+
+	s|([\d.]+)%|($hash{$max}*$1/100)| if($hash{$max});
+
+	s/^-/$hash{$max}-/;
+
+	return($_);
+}
+
 =head2 Time Format
 
 Specifying times is critical to using B<clips>.  And the syntax follows
@@ -830,18 +919,8 @@ consistant way to specify times.
 
 =item position
 
-The position can be something as simple as specifying the top left corner
-of the text box as 100x100 pixels from the image top left corner with
-C<100:100>, to using negative numbers to specify distance from other edges
-(e.g. C<10,-10> would make the bottom left corner of the text box be 10
-pixels from the left side and 10 pixels up from the bottom of the image).
-
-Or, you can use one of six nemonics:  C<left>, C<center>, C<right> and
-C<top>, C<middle>, C<bottom> to look like C<bottom:right>.
-
-Lastly, you have pretty much full access to the L<ffmpeg-filters(1)>
-drawtext C<x=> and C<y=> parameters (which includes the ability to move
-text using the C<t> (time) variable.
+Specify where the text should appear, see L<Calculated Coordinates> for
+more information on what methods are supported.
 
 Note also, that C<text> comes before C<scale> in processing, so use the
 position on the original segment size, ranther the the size as a result
@@ -870,12 +949,14 @@ $F{'simple:video:text'}=sub {
 	my($node, $args, $text)=@_;
 	my($drawtext)='drawtext=';
 	my(%coords)=(
-		'top'	=> 'h*0.01',
-		'middle'	=> '(h-text_h)/2',
-		'bottom'	=> 'h*0.99-text_h',
-		'left'	=> 'w*0.01',
-		'center'	=> '(w-text_w)/2',
-		'right'	=> 'w*0.99-text_w',
+		'w'		=> 'w',
+		'h'		=> 'h',
+		'x'		=> '(w-text_w)',
+		'y'		=> '(h-text_h)',
+		'top'	=> '1%',
+		'bottom'	=> '99%',
+		'left'	=> '1%',
+		'right'	=> '99%',
 	);
 	my(%params)=(
 		'fontcolor'	=> 'black@0.9',
@@ -900,32 +981,8 @@ $F{'simple:video:text'}=sub {
 				FFUtils::time2secs($1),
 				FFUtils::time2secs($2 // $node->{'length'}));
 		} elsif(m|^([\w()*/+-]+)[:x]([\w()*/+-]+)$|i) {
-			$params{'x'}=$1;
-			$params{'y'}=$2;
-
-			if(exists($coords{$params{'x'}})) {
-				if($coords{$params{'x'}}=~m/w/) {
-					$params{'x'}=$coords{$params{'x'}};
-				} else {
-					&err(11, 'Oops, you specified a height where you needed a width');
-				}
-			}
-			if(exists($coords{$params{'y'}})) {
-				if($coords{$params{'y'}}=~m/h/) {
-					$params{'y'}=$coords{$params{'y'}};
-				} else {
-					&err(11, 'Oops, you specified a width where you needed a height');
-				}
-			}
-
-			$params{'x'}="w-text_w+$params{'x'}" if($params{'x'}<0);
-			$params{'y'}="h-text_h+$params{'y'}" if($params{'y'}<0);
-
-			#Support percentages for numbers:
-			$params{'w'}=~s|([\d.]+)%|(iw*$1/100)|g;
-			$params{'h'}=~s|([\d.]+)%|(ih*$1/100)|g;
-			$params{'x'}=~s|([\d.]+)%|(iw*$1/100)|g;
-			$params{'y'}=~s|([\d.]+)%|(ih*$1/100)|g;
+			$params{'x'}=&calc($1, 'x', %coords);
+			$params{'y'}=&calc($2, 'y', %coords);
 		} else {
 			&err(15, 'drawtext argument not understood:', $_);
 		}
@@ -988,12 +1045,10 @@ $M{'simple:video:box'}='box/?(.*)/(.*)';
 $F{'simple:video:box'}=sub {
 	my($node, $args, $geom)=@_;
 	my(%coords)=(
-		'top'	=> '0',
-		'middle'	=> '(ih-h)/2',
-		'bottom'	=> 'ih-h',
-		'left'	=> '0',
-		'center'	=> '(iw-w)/2',
-		'right'	=> 'iw-w',
+		'w'		=> 'iw',
+		'h'		=> 'ih',
+		'x'		=> '(iw-w)',
+		'y'		=> '(ih-h)',
 	);
 	my(%params)=(
 		'c'		=> 'black',
@@ -1017,21 +1072,11 @@ $F{'simple:video:box'}=sub {
 		}
 	}
 
-	$geom=~s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|($1)/($2)|g;
 	@params{'w', 'h', 'x', 'y'}=split(m/:/, $geom);
-	$params{'x'}=$coords{$params{'x'}} if(exists($coords{$params{'x'}}));
-	$params{'y'}=$coords{$params{'y'}} if(exists($coords{$params{'y'}}));
-
-	#Support percentages for numbers:
-	$params{'w'}=~s|([\d.]+)%|(iw*$1/100)|g;
-	$params{'h'}=~s|([\d.]+)%|(ih*$1/100)|g;
-	$params{'x'}=~s|([\d.]+)%|(iw*$1/100)|g;
-	$params{'y'}=~s|([\d.]+)%|(ih*$1/100)|g;
-
-	$params{'w'}=~s/^-/iw-/;
-	$params{'h'}=~s/^-/ih-/;
-	$params{'x'}=~s/^-/iw-w-/;
-	$params{'y'}=~s/^-/ih-h-/;
+	$params{'w'}=&calc($params{'w'}, 'w', %coords);
+	$params{'h'}=&calc($params{'h'}, 'h', %coords);
+	$params{'x'}=&calc($params{'x'}, 'x', %coords);
+	$params{'y'}=&calc($params{'y'}, 'y', %coords);
 
 	foreach my $key (sort(keys(%params))) {
 		push(@drawbox, join('=', $key, $params{$key})) if($key);
@@ -1124,12 +1169,12 @@ $F{'simple:video:scale'}=sub {
 		if($parent->{'merge'} eq 'h') {
 			return(@scale) if($node->{'height'}==$h);
 
-			$node->{'width'}=&even($node->{'width'}*$h/$node->{'height'});
+			$node->{'width'}=-1;
 			$node->{'height'}=$h;
 		} elsif($parent->{'merge'} eq 'v') {
 			return(@scale) if($node->{'width'}==$w);
 
-			$node->{'height'}=&even($node->{'height'}*$w/$node->{'width'});
+			$node->{'height'}=-1;
 			$node->{'width'}=$w;
 		} elsif($parent->{'merge'} eq 'x') {
 			return(@scale) if($node->{'width'}==$w && $node->{'height'}==$h);
@@ -1146,6 +1191,12 @@ $F{'simple:video:scale'}=sub {
 					'H'	=> $node->{'height'},
 					'A'	=> $fill?'disable':'decrease',
 		}));
+		push(@scale,
+			&fmt('pad=#{W}:#{H}:(ow-iw)/2:(oh-ih)/2', {
+					'W'	=> $node->{'width'},
+					'H'	=> $node->{'height'},
+			}),
+		) if($parent->{'merge'} eq 'x' && !$fill);
 	} elsif($node->{'width'}!=$w || $node->{'height'}!=$h) {
 		$node->{'width'}=$w;
 		$node->{'height'}=$h;
@@ -1181,6 +1232,36 @@ $F{'simple:video:flip'}=sub {
 	my($node, $type)=@_;
 
 	return(&fmt('%sflip', $type || 'h'));
+};
+
+=item rotate/<rotate>[/fillcolor]
+
+Rotate the video by C<rotate>.  The rotation is mandatory, and it must
+be either in degrees (positive or negative) or multiples of either the
+letters C<R> or C<L>.  E.g. C<rotate/RR> rotates right twice for the
+equivalent of 180 degrees and C<rotate/L> rotates left once for the
+equivalent of -90 degrees.
+Most logically you would specify a multiple of 90.  However, if
+another angle is specified, the video's geometry will be expanded
+to contain the new video and empty space will be filled with
+C<fillcolor> if specified (black otherwise).
+
+=cut
+
+$M{'simple:video:rotate'}='rotate/(.*)/?(.*)';
+$F{'simple:video:rotate'}=sub {
+	my($node, $degrees, $color)=@_;
+
+	if($degrees=~m/^(R+)$/i) {
+		$degrees=90*length($1);
+	} elsif($degrees=~m/^(L+)$/i) {
+		$degrees=-90*length($1);
+	}
+
+	return(&fmt('rotate=a=#{R}:ow=rotw(#{R}):oh=roth(#{R}):c=#{C}', {
+		'R'	=> $degrees*3.1415926536/180,
+		'C'	=> $color || 'black',
+	}));
 };
 
 =item fade-in[/time]
@@ -1619,12 +1700,10 @@ $F{'complex:overlay'}=sub {
 	my($alpha, $color)=(undef, undef);
 	my($vatop)=&next_labels($node, 'video' => 1);
 	my(%coords)=(
-		'top'	=> '0',
-		'middle'	=> '(H-h)/2',
-		'bottom'	=> 'H-h',
-		'left'	=> '0',
-		'center'	=> '(W-w)/2',
-		'right'	=> 'W-w',
+		'w'		=> 'W',
+		'h'		=> 'H',
+		'x'		=> '(W-w)',
+		'y'		=> '(H-h)',
 	);
 	my(@overlay)=();
 
@@ -1640,16 +1719,13 @@ $F{'complex:overlay'}=sub {
 			if($alpha<0 || 100<$alpha) {
 				&err(8, 'Overlay alpha is out of proper range 0-100');
 			}
-		} elsif($option=~m/^(0x|#)([\da-f]{6})(:[:\d.]+)?$/i) {
-			$color="0x$1$2";
-		} elsif($option=~m/^([a-z]+:[:\d.]+)?$/i) {
-			$color=$option;
+		} elsif($option=~m/^(0x|#)([\da-f]{6})(:([\d.]+))?(:([\d.]+))?$/i) {
+			$color=&fmt("0x%s:%f:%f", "$2", $4+0 || 0.05, $6+0 || 0.2);
+		} elsif($option=~m/^([a-z]+)(:([\d.]+))?(:([\d.]+))?$/i) {
+			$color=&fmt("%s:%f:%f", "$1", $3+0 || 0.05, $5+0 || 0.2);
 		} elsif($option=~m/^([^:]+?):([^:]+)$/i) {
-			$x=$coords{$1} || $1;
-			$y=$coords{$2} || $2;
-
-			$x=~s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|($1)/($2)|g;
-			$y=~s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|($1)/($2)|g;
+			$x=&calc($1, 'x', %coords);
+			$y=&calc($2, 'y', %coords);
 
 			$eval='frame' if($x=~m/\b[tn]\b/ || $y=~m/\b[tn]\b/);
 		}
@@ -1830,13 +1906,14 @@ $F{'group:stack'}=sub {
 	my(@ain)=();
 	my(@stack)=();
 
+	&copykeys($node->{'tree'}[0] => $node,
+		'width', 'height', 'fps', 'atb', 'vtb');
+
 	foreach my $sub (@{$node->{'tree'}}) {
 		push(@vin, $sub->{'video'});
 		push(@ain, $sub->{'audio'});
 	}
 
-	&copykeys($node->{'tree'}[0] => $node,
-		'width', 'height', 'fps', 'atb', 'vtb');
 	if($type eq 'h') {
 		$node->{'width'}=List::Util::sum(
 			map($_->{'width'}, @{$node->{'tree'}})
@@ -1991,13 +2068,13 @@ Note, if you use this token often, consider using a L<UserFile> instead
 
 =cut
 
-$M{'simple:video:ffmpeg'}='ff[mpeg]*/v/(.*)';
+$M{'simple:video:ffmpeg'}='ff[mpeg]*/v[ideo]*/(.*)';
 $F{'simple:video:ffmpeg'}=sub {
 	#Wait, what.  We are passing this straight through to ffmpeg?  Scary!
 	return($_[1]);
 };
 
-$M{'simple:audio:ffmpeg'}='ff[mpeg]*/a/(.*)';
+$M{'simple:audio:ffmpeg'}='ff[mpeg]*/a[udio]*/(.*)';
 $F{'simple:audio:ffmpeg'}=sub {
 	#Wait, what.  We are passing this straight through to ffmpeg?  Scary!
 	return($_[1]);
@@ -2053,6 +2130,7 @@ my(@ORDER)=qw(
 	simple:video:crop
 	simple:video:scale
 	simple:video:flip
+	simple:video:rotate
 	simple:video:ffmpeg
 );
 
@@ -2544,9 +2622,6 @@ sub parse {
 			while($cur->{'type'} eq 'complex') { #bubble out
 				$cur=$cur->{'parent'};
 			}
-
-			redo if(s|^}}|}|);  #If someone bundles braces, make it work
-
 		} elsif(m/^([\d:.]+)-([\d:.]+)?$/) {
 			my($start)=FFUtils::time2secs($1);
 			my($end)=defined($2)?FFUtils::time2secs($2):$SOURCES{$src}{'length'};
