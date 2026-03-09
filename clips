@@ -42,6 +42,16 @@ standard method of placing the filename on the command-line when it is
 to become named.  Additionally, when used, the named file becomes the active
 one for the next clip segment specification.
 
+=item -I or -implied
+
+Assume for every input file that an implied C<0-> (full file) clip is
+requested.  This is a lazy sauce option that is mostly useful for wildcards.
+
+Note 1: that if you also specify a clip, it will also be part of the output.
+Note 2: this feature does not work with the numbered placeholders mentioned
+above.  So, you can use that for exceptions that shouldn't specify the entire
+file length as the clip.
+
 =item -title=<text>
 
 Set the output file's C<TITLE> metadata to C<text>.
@@ -215,6 +225,7 @@ Print full manual.
 
 my(@TOKENS)=();
 my($DST)=undef;
+my(%SOURCES)=();
 my(%ARG)=(
 	'overlay'			=> 33,
 	'transition'		=> 0.8,
@@ -229,6 +240,7 @@ my(@OPTIONS)=qw(
 	title=s
 	comment=s
 	description=s
+	implied|I
 	overlay|o=s
 	transition|transition-time|transitions|t=f
 	transition-type|transitiontype|ttype|T=s
@@ -255,10 +267,29 @@ my(@OPTIONS)=qw(
 	manual|H
 );
 
+sub lookup_file {
+	my($file)=@_;
+
+	return(undef) unless(-f $file);
+	return($SOURCES{$file}) if(exists($SOURCES{$file}));
+
+	return({
+		'length'	=> FFUtils::duration($file),
+		'width'	=> FFUtils::width($file),
+		'height'	=> FFUtils::height($file),
+		'fps'	=> FFUtils::framerate($file),
+		'vtb'	=> FFUtils::video_timebase($file),
+		'atb'	=> FFUtils::audio_timebase($file),
+		'video'	=> FFUtils::has_video($file),
+		'audio'	=> FFUtils::has_audio($file),
+	});
+}
+
 my(%OPTIONS)=(
 	'0=s' => sub {
 			$ARG{$_[0]}=$_[1];
 			push(@TOKENS, $_[1]);
+			$SOURCES{$_[1]}=&lookup_file($_[1]);
 	},
 	'font|F=s' => sub {
 		push(@TOKENS, join('/', 'font', $_[1]));
@@ -284,6 +315,12 @@ my(%OPTIONS)=(
 				push(@TOKENS, $3) if($3);
 			} elsif(!$DST) {
 				$DST=$_;
+			} elsif(-f $_) {
+				$SOURCES{$_}=&lookup_file($_);
+				push(@TOKENS, $_);
+				if($ARG{'implied'}) {
+					push(@TOKENS, '0-');
+				}
 			} else {
 				push(@TOKENS, $_);
 			}
@@ -293,7 +330,7 @@ for my $opt (1 .. 99) {
 	$OPTIONS{"$opt=s"}=$OPTIONS{'0=s'};
 }
 
-s/^-(\w+):/-$1-/ foreach(@ARGV);	#Fixup for colons in options
+s/^-([a-z]+):([a-z]+)/-$1-$2/ foreach(@ARGV);	#Fixup for colons in options
 
 Getopt::Long::Configure('bundling_override');
 unless(GetOptions(\%ARG, @OPTIONS, %OPTIONS)) {
@@ -317,7 +354,6 @@ if($ARG{'print'}=~m/defaults/i || $ARG{'debug'}>4) {
 my(@MPV)=qw(mpv --osd-fractions --msg-level=cplayer=no,statusline=status);
 my(@WATCH)=();
 
-my(%SOURCES)=();
 my($ROOT)=undef;
 my(@INPUTS)=();
 my(@FFPROGRAM)=();
@@ -1186,10 +1222,12 @@ $F{'simple:video:scale'}=sub {
 		}
 
 		push(@scale, &fmt(
-			'scale=#{W}:#{H}:force_original_aspect_ratio=#{A}:reset_sar=1', {
+			'scale=#{W}:#{H}:force_original_aspect_ratio=#{A}:#{T}:#{S}', {
 					'W'	=> $node->{'width'},
 					'H'	=> $node->{'height'},
 					'A'	=> $fill?'disable':'decrease',
+					'T'	=> 'force_divisible_by=2',
+					'S'	=> 'reset_sar=1',
 		}));
 		push(@scale,
 			&fmt('pad=#{W}:#{H}:(ow-iw)/2:(oh-ih)/2', {
@@ -1202,10 +1240,12 @@ $F{'simple:video:scale'}=sub {
 		$node->{'height'}=$h;
 
 		push(@scale, &fmt(
-			'scale=#{W}:#{H}:force_original_aspect_ratio=#{A}:reset_sar=1', {
+			'scale=#{W}:#{H}:force_original_aspect_ratio=#{A}:#{T}:#{S}', {
 					'W'	=> $node->{'width'},
 					'H'	=> $node->{'height'},
 					'A'	=> $fill?'disable':'decrease',
+					'T'	=> 'force_divisible_by=2',
+					'S'	=> 'reset_sar=1',
 			}),
 		);
 
@@ -1214,7 +1254,7 @@ $F{'simple:video:scale'}=sub {
 					'W'	=> $node->{'width'},
 					'H'	=> $node->{'height'},
 			}),
-		) unless($fill);
+		) unless($fill || $node->{'width'}<0 || $node->{'height'}<0);
 	}
 
 	return(@scale);
@@ -1406,7 +1446,7 @@ $F{'complex:blur'}=sub {
 =item audio
 
 An extremely simple token to extract only the audio content from a clip.
-Note, there is no analogous token for videos as man complex filters
+Note, there is no analogous token for videos as many complex filters
 expect a video to have audio.  If you need to supress audio from a
 video clip, you can use C<v/0> to set the volume to 0.
 
@@ -1893,7 +1933,10 @@ outside the braces will be applied to the combined video against it's new
 resolution.
 
 Stack notes:
-the duration of the combination is based on the shortest sub entry.
+Any entries which do not contain video will be audio merged and skipped
+when compiling the video clip.
+
+The duration of the combination is based on the shortest sub entry.
 What goes inside the braces follows all other conventions for file
 inputs and command-line tokens.
 
@@ -1910,8 +1953,8 @@ $F{'group:stack'}=sub {
 		'width', 'height', 'fps', 'atb', 'vtb');
 
 	foreach my $sub (@{$node->{'tree'}}) {
-		push(@vin, $sub->{'video'});
-		push(@ain, $sub->{'audio'});
+		push(@vin, $sub->{'video'}) if($sub->{'video'});
+		push(@ain, $sub->{'audio'}) if($sub->{'audio'});
 	}
 
 	if($type eq 'h') {
@@ -1954,8 +1997,8 @@ $F{'group:xstack'}=sub {
 	my(@stack)=();
 
 	foreach my $sub (@{$node->{'tree'}}) {
-		push(@vin, $sub->{'video'});
-		push(@ain, $sub->{'audio'});
+		push(@vin, $sub->{'video'}) if($sub->{'video'});
+		push(@ain, $sub->{'audio'}) if($sub->{'audio'});
 	}
 
 	if(@vin<$n) {
@@ -2429,19 +2472,9 @@ sub parse {
 	my($stream)=0;
 	my(@args);
 
-	foreach(@_) {		#Processor
-		if(-f $_) {
+	foreach(@_) {
+		if(exists($SOURCES{$_})) {
 			$src=$_;
-			$SOURCES{$src}={
-				'length'	=> FFUtils::duration($src),
-				'width'	=> FFUtils::width($src),
-				'height'	=> FFUtils::height($src),
-				'fps'	=> FFUtils::framerate($src),
-				'vtb'	=> FFUtils::video_timebase($src),
-				'atb'	=> FFUtils::audio_timebase($src),
-				'video'	=> FFUtils::has_video($src),
-				'audio'	=> FFUtils::has_audio($src),
-			};
 		} elsif(@args=m|^font/(.*)$|i) {
 			($ARG{'fontfile'}, $ARG{'font'})=&find_font($args[0]);
 
@@ -2838,18 +2871,22 @@ sub generate_filters {
 			$node->{'video'}=$node->{'tree'}[0]{'video'};
 		}
 
-		$node->{'f:v'}=$node->{'video'} . join(',', @video) . $vout;
-		push(@filters, $node->{'f:v'});
-		$node->{'video'}=$vout;
+		if($node->{'video'}) {
+			$node->{'f:v'}=$node->{'video'} . join(',', @video) . $vout;
+			push(@filters, $node->{'f:v'});
+			$node->{'video'}=$vout;
+		}
 	}
 	if(@audio) {
 		unless($node->{'audio'}) {
 			$node->{'audio'}=$node->{'tree'}[0]{'audio'};
 		}
 
-		$node->{'f:a'}=$node->{'audio'} . join(',', @audio) . $aout;
-		push(@filters, $node->{'f:a'});
-		$node->{'audio'}=$aout;
+		if($node->{'audio'}) {
+			$node->{'f:a'}=$node->{'audio'} . join(',', @audio) . $aout;
+			push(@filters, $node->{'f:a'});
+			$node->{'audio'}=$aout;
+		}
 	}
 
 	return(@filters);
