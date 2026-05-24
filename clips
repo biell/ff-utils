@@ -1978,12 +1978,17 @@ $F{'group:stack'}=sub {
 			'D'	=> 'shortest',
 			'O'	=> $node->{'video'},
 		}));
-	push(@stack, &fmt('#{Is}amix=inputs=#{N}:duration=#{D}#{O}', {
-			'Is'	=> join('', @ain),
-			'N'	=> scalar(@ain),
-			'D'	=> 'shortest',
-			'O'	=> $node->{'audio'}
-		}));
+
+	if(@ain) {
+		push(@stack, &fmt('#{Is}amix=inputs=#{N}:duration=#{D}#{O}', {
+				'Is'	=> join('', @ain),
+				'N'	=> scalar(@ain),
+				'D'	=> 'shortest',
+				'O'	=> $node->{'audio'}
+			}));
+	} else {
+		$node->{'audio'}=undef;
+	}
 
 	return(@stack);
 };
@@ -2021,14 +2026,19 @@ $F{'group:xstack'}=sub {
 			'Y'	=> $y,
 			'D'	=> 'shortest',
 			'O'	=> $node->{'video'},
-		}),
-		&fmt('#{Is}amix=inputs=#{N}:duration=#{D}#{O}', {
-			'Is'	=> join('', @ain),
-			'N'	=> scalar(@ain),
-			'D'	=> 'shortest',
-			'O'	=> $node->{'audio'}
-		}),
-	);
+		}));
+
+	if(@ain) {
+		push(@stack,
+			&fmt('#{Is}amix=inputs=#{N}:duration=#{D}#{O}', {
+				'Is'	=> join('', @ain),
+				'N'	=> scalar(@ain),
+				'D'	=> 'shortest',
+				'O'	=> $node->{'audio'}
+			}));
+	} else {
+		$node->{'audio'}=undef;
+	}
 
 	return(@stack);
 };
