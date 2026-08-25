@@ -130,7 +130,7 @@ file.
 
 =item -S or -substitute
 
-For files (input or output) substitue C<%<l>> formats similar to
+For files (input or output) substitue C<%l> formats similar to
 the L<date(1)> command.  This only works on files.
 
 =item -R <#> or -rate=<#>
@@ -808,9 +808,9 @@ sub calc {
 		$_=$hash{'center'};
 	} elsif($max eq 'y' && m/center/i && $hash{'middle'}) {
 		$_=$hash{'middle'};
-	} elsif($hash{$_}) {
+	} elsif(exists($hash{$_})) {
 		$_=$hash{$_};
-	} elsif($hash{lc($_)}) {
+	} elsif(exists($hash{lc($_)})) {
 		$_=$hash{lc($_)};
 	}
 
@@ -1159,7 +1159,7 @@ $F{'simple:video:crop'}=sub {
 	return(&fmt('crop=%d:%d:%d:%d', $w, $h, $x, $y));
 };
 
-=item scale[/H:W][/<fill|pad>]
+=item scale[/W:H][/<fill|pad>]
 
 Scale the next video to the default height and width, or what is specified
 with the token.
@@ -1698,9 +1698,7 @@ C</> characters.
 
 If the optional integer C<n> is specified as a number between 0 and
 100, then this is used as the percentage of coverage for the left video.
-This defaults to C<66>, for an alpha configuration of C<0.66>. This is
-the default mode and produces an image where both inputs are blended
-together.
+This defaults to no alpha, with the right image completely covering the left.
 
 If C<option> is of the form X:Y or XxY, then these will be the C<X> and C<Y>
 coordinates of the top left corner of the overlayed image.  This really only
@@ -3117,7 +3115,6 @@ for video and audio-only respectively.
 
 if($ARG{'format'}) {
 	my(@time)=localtime(time());
-	print join(' ', @INPUTS, @FFPROGRAM), "\n\n";
 	my(%sub)=(
 		't'	=> ['d', FFUtils::time2secs(int($ROOT->{'length'}))],
 		'T'	=> ['d', FFUtils::secs2time(int($ROOT->{'length'}))],
