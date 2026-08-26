@@ -143,6 +143,10 @@ sub height {
 	return(&probe($_[0], 'video:height'));
 }
 
+sub format {
+	return(&probe($_[0], 'video:pix_fmt'));
+}
+
 sub framerate {
 	return(&probe($_[0], 'video:r_frame_rate'));
 }

@@ -278,6 +278,7 @@ sub lookup_file {
 		'length'	=> FFUtils::duration($file),
 		'width'	=> FFUtils::width($file),
 		'height'	=> FFUtils::height($file),
+		'format'	=> FFUtils::format($file),
 		'fps'	=> FFUtils::framerate($file),
 		'vtb'	=> FFUtils::video_timebase($file),
 		'atb'	=> FFUtils::audio_timebase($file),
@@ -1408,7 +1409,7 @@ $F{'complex:fade'}=sub {
 	}
 
 	&copykeys($node->{'tree'}[0] => $node,
-		'width', 'height', 'fps', 'atb', 'vtb');
+		'width', 'height', 'format', 'fps', 'atb', 'vtb');
 
 	%macros=(
 		'T'	=> lc($type),
@@ -1462,7 +1463,7 @@ $F{'complex:blur'}=sub {
 	$length||=$ARG{'fade'};
 
 	&copykeys($node->{'tree'}[0] => $node,
-		'width', 'height', 'fps', 'atb', 'vtb');
+		'width', 'height', 'format', 'fps', 'atb', 'vtb');
 	($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
 	if($length>$node->{'length'}) {
@@ -1534,6 +1535,7 @@ $F{'complex:audio'}=sub {
 	&copykeys($node->{'tree'}[0] => $node, 'audio', 'atb');
 
 	$node->{'video'}=undef;
+	$node->{'format'}=undef;
 	$node->{'fps'}=undef;
 	$node->{'vtb'}=undef;
 	$node->{'width'}=undef;
@@ -1589,7 +1591,7 @@ $F{'complex:speed'}=sub {
 	$speed||=$ARG{'speed'};
 
 	&copykeys($node->{'tree'}[0] => $node,
-		'width', 'height', 'fps', 'atb', 'vtb');
+		'width', 'height', 'format', 'fps', 'atb', 'vtb');
 
 	push(@speed, &fmt('#{I}setpts=#{S}*PTS#{O}', {
 			'I'	=> $vin,
@@ -1704,7 +1706,7 @@ $F{'complex:transition'}=sub {
 	my($offset)=$l->{'length'}-$time;
 	my(@fade)=();
 
-	&copykeys($l => $node, 'width', 'height', 'fps', 'atb', 'vtb');
+	&copykeys($l => $node, 'width', 'height', 'format', 'fps', 'atb', 'vtb');
 	$node->{'length'}=$offset+$r->{'length'};
 	($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
@@ -1814,7 +1816,7 @@ $F{'complex:overlay'}=sub {
 	);
 	my(@overlay)=();
 
-	&copykeys($main => $node, 'width', 'height', 'fps', 'atb', 'vtb');
+	&copykeys($main => $node, 'width', 'height', 'format', 'fps', 'atb', 'vtb');
 	$node->{'length'}=List::Util::min($main->{'length'}, $over->{'length'});
 	($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
@@ -1929,7 +1931,7 @@ $F{'group:concat'}=sub {
 	my(@concat)=();
 
 	&copykeys($node->{'tree'}[0] => $node,
-		'video', 'audio', 'width', 'height', 'fps', 'atb', 'vtb');
+		'video', 'audio', 'width', 'height', 'format', 'fps', 'atb', 'vtb');
 
 	foreach my $child (@{$node->{'tree'}}) {
 		if($node->{'audio'} && !$child->{'audio'}) {
@@ -2017,7 +2019,7 @@ $F{'group:stack'}=sub {
 	my(@stack)=();
 
 	&copykeys($node->{'tree'}[0] => $node,
-		'width', 'height', 'fps', 'atb', 'vtb');
+		'width', 'height', 'format', 'fps', 'atb', 'vtb');
 
 	foreach my $sub (@{$node->{'tree'}}) {
 		push(@vin, $sub->{'video'}) if($sub->{'video'});
@@ -2079,7 +2081,7 @@ $F{'group:xstack'}=sub {
 		&err(13, "Too many clips for a ${x}x${y} grid");
 	}
 
-	&copykeys($node->{'tree'}[0] => $node, 'fps', 'atb', 'vtb');
+	&copykeys($node->{'tree'}[0] => $node, 'format', 'fps', 'atb', 'vtb');
 
 	$node->{'width'}=$node->{'tree'}[0]{'width'}*$x;
 	$node->{'height'}=$node->{'tree'}[0]{'height'}*$y;
@@ -2143,7 +2145,7 @@ $F{'group:aoverlay'}=sub {
 	my(@overlay)=();
 
 	&copykeys($node->{'tree'}[0] => $node,
-		'video', 'width', 'height', 'fps', 'atb', 'vtb');
+		'video', 'width', 'height', 'format', 'fps', 'atb', 'vtb');
 	$node->{'audio'}=$aout;
 
 	foreach my $child (@{$node->{'tree'}}) {
@@ -2755,6 +2757,7 @@ sub parse {
 				$node->{'video'}=&fmt('[%d:v]', $stream);
 				$node->{'width'}=$SOURCES{$src}{'width'};
 				$node->{'height'}=$SOURCES{$src}{'height'};
+				$node->{'format'}=$SOURCES{$src}{'format'};
 				$node->{'fps'}=$SOURCES{$src}{'fps'};
 				$node->{'vtb'}=$SOURCES{$src}{'vtb'};
 				$node->{'atb'}=$SOURCES{$src}{'atb'};
