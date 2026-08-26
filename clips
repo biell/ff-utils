@@ -1327,6 +1327,52 @@ $F{'simple:video:rotate'}=sub {
 	}));
 };
 
+=item agframe[/lrtb][/#[%]]
+
+Create an alpha graident frame on the image to blend it into (presumably)
+whatever it is being laid on top of with a C<%> overlay.  The size of the
+frame can be specified as an integer to mean pixles or as a percentage, to
+mean that percentage of the image's width in pixles.  Note that this is
+true even if you are only creating a border on the top or bottom.  By
+default, no border is actually gradiated, the C<l>, C<r>, C<t>, and C<b>
+paramaters are additive.
+
+=cut
+
+$M{'simple:video:agframe'}='agframe/?(.*)';
+$F{'simple:video:agframe'}=sub {
+	my($node, $args)=@_;
+	my($l, $r, $t, $b)=(0, 0, 0, 0);
+	my($size)=32;
+	my(@frame)=('format=rgba');
+	my($alpha);
+
+	foreach (split(m|/|, $args)) {
+		$l=1 if(m/l/i);
+		$r=1 if(m/r/i);
+		$t=1 if(m/t/i);
+		$b=1 if(m/b/i);
+
+		if(m/(\d+)%/) {
+			$size=$node->{'width'}*$1/100;
+		} elsif(m/(\d+)/) {
+			$size=$1;
+		}
+	}
+
+	$alpha=&fmt('min(min(min(#{L}\,#{R})\,min(#{T}\,#{B}))\,255)', {
+		'S'	=> 255/$size,
+		'L'	=> $l?'X*#{S}':'W',
+		'R'	=> $r?'(W-X)*#{S}':'W',
+		'T'	=> $t?'Y*#{S}':'H',
+		'B'	=> $b?'(H-Y)*#{S}':'H',
+	});
+
+	push(@frame, "geq=r=r(X\\,Y):g=g(X\\,Y):b=b(X\\,Y):a=$alpha");
+
+	return(@frame);
+};
+
 =item fade-in[/time]
 
 Perform a fade in for your video.  Technically, this feature can be used
@@ -2205,6 +2251,7 @@ my(@ORDER)=qw(
 	simple:video:scale
 	simple:video:flip
 	simple:video:rotate
+	simple:video:agframe
 	simple:video:ffmpeg
 );
 
