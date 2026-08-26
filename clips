@@ -226,8 +226,9 @@ Print full manual.
 my(@TOKENS)=();
 my($DST)=undef;
 my(%SOURCES)=();
+my(@INPUTS)=();
+my($ACOPYOK, $VCOPYOK)=(1, 1);
 my(%ARG)=(
-	'overlay'			=> 33,
 	'transition'		=> 0.8,
 	'transition-type'	=> 'fade',
 	'fade'			=> 3,
@@ -315,6 +316,23 @@ my(%OPTIONS)=(
 				push(@TOKENS, $3) if($3);
 			} elsif(!$DST) {
 				$DST=$_;
+			} elsif(m|^generate/|i) {
+				my($w, $h, $color)=m|^generate/(\d+)[x:](\d+)/?(\w*)|;
+				my($input)="color=s=${w}x${h}:c=".($color||'black');
+
+				$SOURCES{$input}={
+					'length'	=> 2**31,
+					'fps'	=> $ARG{'rate'} || 25,
+					'video'	=> 1,
+					'audio'	=> 0,
+				};
+				$VCOPYOK=0;
+				push(@INPUTS, '-f', 'lavfi');
+				push(@TOKENS, $input);
+
+				if($ARG{'implied'}) {
+					push(@TOKENS, '0-');
+				}
 			} elsif(-f $_) {
 				$SOURCES{$_}=&lookup_file($_);
 				push(@TOKENS, $_);
@@ -355,7 +373,6 @@ my(@MPV)=qw(mpv --osd-fractions --msg-level=cplayer=no,statusline=status);
 my(@WATCH)=();
 
 my($ROOT)=undef;
-my(@INPUTS)=();
 my(@FFPROGRAM)=();
 
 if($ARG{'practice'}) {
@@ -860,6 +877,12 @@ Any filename specified after the output file (and you need to do this at
 least once) will mean that any clips specified after this file will come
 from it.  You can change the filename as many times as you want, and you
 can come back and repeat at filename if you wish.
+
+=item <generate/W:H[/color]>
+
+If you need a base image (e.g. using overlays) you can use this token to
+generate one either in the default black or as <color>.  You must always
+specify the width and height of the image to generate.
 
 =item <[#]> or <[#:<a|v>]>
 
@@ -1735,7 +1758,7 @@ $F{'complex:overlay'}=sub {
 	my($main)=$node->{'tree'}[0];
 	my($over)=$node->{'tree'}[1];
 	my($x, $y, $eval)=(0, 0, 'init');
-	my($alpha, $color)=(undef, undef);
+	my($alpha, $color)=($ARG{'overlay'}, undef);
 	my($vatop)=&next_labels($node, 'video' => 1);
 	my(%coords)=(
 		'w'		=> 'W',
@@ -2552,7 +2575,7 @@ sub parse {
 
 				%filt,
 
-				'complex:overlay'	=> [ $args[0] || $ARG{'overlay'} ],
+				'complex:overlay'	=> [ @args ],
 			);
 
 			$cur=&insert_branch($last => $node);
@@ -2909,10 +2932,10 @@ sub map_outputs {
 		push(@program, '-filter_complex', join(';', @filters));
 	}
 
-	if($root->{'video'}=~s/\[(\d+):v\]/$1:v/) {
+	if($root->{'video'}=~s/\[(\d+):v\]/$1:v/ && $VCOPYOK) {
 		push(@program, '-c:v', 'copy');
 	}
-	if($root->{'audio'}=~s/\[(\d+):a\]/$1:a/) {
+	if($root->{'audio'}=~s/\[(\d+):a\]/$1:a/ && $ACOPYOK) {
 		push(@program, '-c:a', 'copy');
 	}
 
