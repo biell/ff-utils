@@ -9,7 +9,7 @@ clips - Make a video file out of clips from other videos
 
 =cut
 
-my($VERSION)='0.9';
+my($VERSION)='1.0';
 
 use POSIX;
 use List::Util;
@@ -206,6 +206,10 @@ displayed regarding B<clips> execution.
 
 Display Version and exit.
 
+=item -D or -tokens
+
+Display Token documentation.
+
 =item -e or -examples
 
 Print the B<EXAMPLES> section of the manual.  This section is the best
@@ -263,6 +267,7 @@ my(@OPTIONS)=qw(
 	dry-run|dryrun|n
 	debug|verbose|d+
 	version|V
+	tokens|token|D
 	examples|example|e
 	help|?|h
 	manual|H
@@ -1344,8 +1349,8 @@ $M{'simple:video:agframe'}='agframe/?(.*)';
 $F{'simple:video:agframe'}=sub {
 	my($node, $args)=@_;
 	my($l, $r, $t, $b)=(0, 0, 0, 0);
-	my($size)=32;
-	my(@frame)=('format=rgba');
+	my($size)=8;
+	my(@frame)=('format=yuva420p');
 	my($alpha);
 
 	foreach (split(m|/|, $args)) {
@@ -1361,17 +1366,78 @@ $F{'simple:video:agframe'}=sub {
 		}
 	}
 
-	$alpha=&fmt('min(min(min(#{L}\,#{R})\,min(#{T}\,#{B}))\,255)', {
+	$alpha=&fmt('min(min(min(#{L},#{R}),min(#{T},#{B})),255)', {
 		'S'	=> 255/$size,
-		'L'	=> $l?'X*#{S}':'W',
-		'R'	=> $r?'(W-X)*#{S}':'W',
-		'T'	=> $t?'Y*#{S}':'H',
-		'B'	=> $b?'(H-Y)*#{S}':'H',
+		'L'	=> $l ? 'X*#{S}'     : 255,
+		'R'	=> $r ? '(W-X)*#{S}' : 255,
+		'T'	=> $t ? 'Y*#{S}'     : 255,
+		'B'	=> $b ? '(H-Y)*#{S}' : 255,
 	});
 
-	push(@frame, "geq=r=r(X\\,Y):g=g(X\\,Y):b=b(X\\,Y):a=$alpha");
+	push(@frame, "geq='lum=p(X,Y):a=$alpha'");
 
 	return(@frame);
+};
+
+=item agring[/#[%]][/x:y][/diameter]
+
+This is similar to agframe, except as a circle.  By default, the center
+of the image is used to measure the center of the diameter line, however
+specifying coordinates in the form of C<#:#> or C<#x#> allow you to
+specify the center.  The alpha gradient will start C<#> pixels from the
+outside edge, or if a percentage is used, the size of the diameter will
+be used.  The diameter defaults to the smaller of the image width or height.
+
+=cut
+
+$M{'simple:video:agring'}='agring/?(.*)';
+$F{'simple:video:agring'}=sub {
+	my($node, $args)=@_;
+	my($x, $y)=($node->{'width'}/2, $node->{'height'}/2);
+	my($radius)=$x<$y ? $x : $y;
+	my(@lengths)=();
+	my($size)=undef;
+	my(@ring)=('format=yuva420p');
+	my($alpha);
+
+	foreach(split(m|/|, $args)) {
+		if(m/(\d+)[x:](\d+)/) {
+			$x=$1;
+			$y=$2;
+			$radius=List::Util::min(
+				$x, $node->{'width'}-$x, $y, $node->{'height'}-$y);
+		} elsif(m/(\d+%)/) {
+			$size=$1;
+		} elsif(m/(\d+)/) {
+			push(@lengths, $1);
+		}
+	}
+
+	if(@lengths>1) {
+		($size, $radius)=sort(@lengths);
+		$radius/=2;
+	} elsif(@lengths==1) {
+		if($size) {
+			$radius=$lengths[0];
+			$radius/=2;
+		} else {
+			$size=$lengths[0];
+		}
+	}
+
+	$size=$radius * 2 * $1/100 if($size=~m/(\d+)%/);
+	$size=2 unless($size);
+
+	$alpha=&fmt('max(min((#{R}-hypot(X-#{X},Y-#{Y}))*#{S},255),0)', {
+		'X'	=> $x,
+		'Y'	=> $y,
+		'R'	=> $radius,
+		'S'	=> 255/$size,
+	});
+
+	push(@ring, "geq='lum=p(X,Y):a=$alpha'");
+
+	return(@ring);
 };
 
 =item fade-in[/time]
@@ -2254,6 +2320,7 @@ my(@ORDER)=qw(
 	simple:video:flip
 	simple:video:rotate
 	simple:video:agframe
+	simple:video:agring
 	simple:video:ffmpeg
 );
 
@@ -3014,6 +3081,8 @@ if($ARG{'version'}) {
 	exit(0);
 } elsif($ARG{'help'} || $ARG{'print'}=~m/usage/i) {
 	pod2usage(-verbose => 1, -exitval => 0);
+} elsif($ARG{'tokens'}) {
+	pod2usage(-verbose => 99, -sections => 'DESCRIPTION/Tokens', -exitval => 0);
 } elsif($ARG{'examples'} || $ARG{'print'}=~m/example/i) {
 	pod2usage(-verbose => 99, -sections => 'EXAMPLES', -exitval => 0);
 } elsif($ARG{'manual'} || $ARG{'print'}=~m/help/i) {

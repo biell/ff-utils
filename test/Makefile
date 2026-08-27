@@ -3,7 +3,7 @@
 TESTS = concat-4k concat-noaudio concat-withaudio fade grid1 grid2 overlay-4k \
 		simple flip transition mirror tro groovy passthrough tteffect1 \
 		tteffect2 carousel blur three text clipings wind utran \
-		hash-a2ec2c90 box
+		hash-a2ec2c90 box softlayer circlecrop
 
 
 CLIPS=clips $@ $(if $(TEXT),-description='$@: $(TEXT)',-description='$@')
@@ -257,6 +257,16 @@ utran.mp4: tro.mp4
 box.mp4: TEXT=Draw a box
 box.mp4: bielue.mp4
 	$(CLIPS) bielue.mp4 box/10px/#aaaa22cc/2-8/60%:35%:center:middle 0-10
+
+softlayer.mp4: TEXT=Overlay an image with alpha gradients
+softlayer.mp4: life.mp4 groovy.mp4
+	$(CLIPS) life.mp4 0-7 %/middle:center groovy.mp4 agframe/bl/64 \
+		crop/600:600:360:240 0-7
+
+circlecrop.mp4: TEXT=Crop a circle out of an image
+circlecrop.mp4: wind.mp4
+	$(CLIPS) generate/1920:1080/orange 0-10 %/90%/middle:center wind.mp4 \
+		agring/640/24 3-13
 
 #######################
 #ODD BALLS
