@@ -154,12 +154,14 @@ the video or to cut it off at a maximum time limit.
 =item -U <userfile> or -user=<userfile>
 
 Supply a userfile of your own tokens to extend B<clips> capabilities or
-act as aliases/shortcuts for L<ffmpeg(1)> functions.
+act as aliases/shortcuts for L<ffmpeg(1)> functions.  This overrides the
+default action of looking in the environment variable C<CLIPS_USERFILE>
+or F<~/.userfilters.clips> (in that order).
 
 =item -O <options> or -ffmpeg=<options>
 
 Pass through C<options> as arguments to the L<ffmpeg(1)> command.  Mostly,
-this is nice to specific which encoder, muxer, etc to use.  Note that
+this is nice to specify which encoder, muxer, etc to use.  Note that
 this optin can be used multiple times, but also, any whitespace within
 the argument C<options> string will be used to seperate L<ffmpeg(1)>
 arguments.
@@ -206,9 +208,9 @@ displayed regarding B<clips> execution.
 
 Display Version and exit.
 
-=item -D or -tokens
+=item -D or -token-help
 
-Display Token documentation.
+Display Token documentation only.
 
 =item -e or -examples
 
@@ -227,18 +229,20 @@ Print full manual.
 
 =cut
 
+my($COLOR_RE)=qr{(?i)#[\da-f]{6,8}|0x[\da-f]{6,8}|[a-z]+@[\d.]+|[a-z]+};
+
 my(@TOKENS)=();
 my($DST)=undef;
 my(%SOURCES)=();
 my(@INPUTS)=();
-my($ACOPYOK, $VCOPYOK)=(1, 1);
 my(%ARG)=(
-	'transition'		=> 0.8,
-	'transition-type'	=> 'fade',
-	'fade'			=> 3,
-	'speed'			=> 1,
-	'volume'			=> 1,
-	'userfile'		=> $ENV{'CLIPS_USERFILE'},
+	'transition'		=>	0.8,
+	'transition-type'	=>	'fade',
+	'fade'			=>	3,
+	'speed'			=>	1,
+	'volume'			=>	1,
+	'userfile'		=>	$ENV{'CLIPS_USERFILE'}
+						|| $ENV{'HOME'}.'/.userfilters.clips',
 );
 
 my(@OPTIONS)=qw(
@@ -267,7 +271,7 @@ my(@OPTIONS)=qw(
 	dry-run|dryrun|n
 	debug|verbose|d+
 	version|V
-	tokens|token|D
+	token-help|tokenhelp|D
 	examples|example|e
 	help|?|h
 	manual|H
@@ -323,7 +327,7 @@ my(%OPTIONS)=(
 			} elsif(!$DST) {
 				$DST=$_;
 			} elsif(m|^generate/|i) {
-				my($w, $h, $color)=m|^generate/(\d+)[x:](\d+)/?(\w*)|;
+				my($w, $h, $color)=m|^generate/(\d+)[x:](\d+)/?($COLOR_RE)|;
 				my($input)="color=s=${w}x${h}:c=".($color||'black');
 
 				$SOURCES{$input}={
@@ -380,6 +384,7 @@ my(@WATCH)=();
 
 my($ROOT)=undef;
 my(@FFPROGRAM)=();
+my($ACOPYOK, $VCOPYOK)=(1, 1);
 
 if($ARG{'practice'}) {
 	$ARG{'res'}='640:360';
@@ -857,6 +862,32 @@ and hours.  In all cases, fractions are optional, but if you don't specify
 them, then ffmpeg will just select the closest frame (and that may not be
 what you want).
 
+=head2 Color Format
+
+B<clips> allows colors to be entered in multiple formats, as supported
+by L<ffmpeg(1)>.  The following formats should be used:
+
+=over 8
+
+=item #RRGGBB or 0xRRGGBB
+
+Use the hexidecimal code for the desired color.
+
+=item #RRGGBBAA or 0xRRGGBBAA
+
+Use the hexidecimal code with the addition of an alpha component.
+
+=item ColorName
+
+The color name.  You can see L<ffmpeg(1)>'s list of colors with the command
+C<ffmpeg -colors>.  It uses camel case in the output, but seems not care
+during execution.
+
+=item ColorName@0.#
+
+The color name, but with an alpha component in the range of 0 - 1 added
+after an at (@) symbol.
+
 =head2 Clip Format
 
 The Clip format is two B<Time Format> strings seperated by a hyphen (-)
@@ -884,11 +915,25 @@ least once) will mean that any clips specified after this file will come
 from it.  You can change the filename as many times as you want, and you
 can come back and repeat at filename if you wish.
 
-=item <generate/W:H[/color]>
+=item <generate/<W>:<H>[/color]>
 
 If you need a base image (e.g. using overlays) you can use this token to
 generate one either in the default black or as <color>.  You must always
 specify the width and height of the image to generate.
+
+=over 8
+
+=item W:H or WxH
+
+This is a mandatory argument and it specifies the width (W) and the height (H)
+of the resulting video.
+
+=item color
+
+Color is an optional parameter to specify the color of the video, it defaults
+to black.
+
+=back
 
 =item <[#]> or <[#:<a|v>]>
 
@@ -1037,7 +1082,7 @@ $F{'simple:video:text'}=sub {
 		s|\\+/|/|g;
 		s|div\(\s*(.*?)\s*,\s*(.*?)\s*\)|($1)/($2)|g;
 
-		if(m/^(#[\da-f@]{6,8}|[a-z]+@[\d.]+|[a-z]+)$/i) {
+		if(m/^($COLOR_RE)$/i) {
 			$params{'fontcolor'}=$1;
 		} elsif(m/^(.+)pt$/i) {
 			$params{'fontsize'}=$1;
@@ -1122,7 +1167,7 @@ $F{'simple:video:box'}=sub {
 	my(@drawbox)=();
 
 	foreach(split(m|/+|, $args)) {
-		if(m/^(#[\da-f@]{6,8}|[a-z]+@[\d.]+|[a-z]+)$/i) {
+		if(m/^($COLOR_RE)$/i) {
 			$params{'c'}=$1;
 		} elsif(m/^fill/i) {
 			$params{'t'}='fill';
@@ -1333,15 +1378,15 @@ $F{'simple:video:rotate'}=sub {
 	}));
 };
 
-=item agframe[/lrtb][/#[%]]
+=item agframe[/#[%]][/lrtb]
 
 Create an alpha graident frame on the image to blend it into (presumably)
-whatever it is being laid on top of with a C<%> overlay.  The size of the
+whatever it is being laid on top of with a C<%> token overlay.  The size of the
 frame can be specified as an integer to mean pixles or as a percentage, to
 mean that percentage of the image's width in pixles.  Note that this is
-true even if you are only creating a border on the top or bottom.  By
-default, no border is actually gradiated, the C<l>, C<r>, C<t>, and C<b>
-paramaters are additive.
+true even if you are only creating a border on the top or bottom.  If
+a side (or multiple sides) are not specified, then all 4 sides will be
+blended with an alpha gradient.
 
 =cut
 
@@ -1366,6 +1411,8 @@ $F{'simple:video:agframe'}=sub {
 		}
 	}
 
+	$l=$r=$t=$b=1 unless($l || $r || $t || $b);
+
 	$alpha=&fmt('min(min(min(#{L},#{R}),min(#{T},#{B})),255)', {
 		'S'	=> 255/$size,
 		'L'	=> $l ? 'X*#{S}'     : 255,
@@ -1379,65 +1426,106 @@ $F{'simple:video:agframe'}=sub {
 	return(@frame);
 };
 
-=item agring[/#[%]][/x:y][/diameter]
+=item vignette[/W:H:X:Y][/#[%]]
 
-This is similar to agframe, except as a circle.  By default, the center
-of the image is used to measure the center of the diameter line, however
-specifying coordinates in the form of C<#:#> or C<#x#> allow you to
-specify the center.  The alpha gradient will start C<#> pixels from the
-outside edge, or if a percentage is used, the size of the diameter will
-be used.  The diameter defaults to the smaller of the image width or height.
+This is similar to agframe, except as an elliptical vignette.
+Note, that an ellips with equal sized width (C<W>) and height (C<H>) is a
+circle.  By default, the center of the image is used to measure the center
+and the image width and height are used.  The alpha gradient will start
+C<#> pixels from the outside edge, or if a percentage is used, the size of
+the width of the ellipse will be used.  This number defaults to 4 and is
+effective at smoothing the border line more than providing a transition.
+
+The alpha gradient is an approximation and not perfect.  It also starts to
+fail if the ellipse is too thin or too flat.  Generally if you are at or
+below the golden ratio, you should not notice deviations in thickness of
+the alpha region.  As the size of the alpha gradient approaches 0, this
+becomes moot anyway.
+
+N.B. - In every square based coordinate specification, C<X> and C<Y> are
+referring to the top left corner of the region.  HOWEVER, that top left
+corner is difficult to conceptualize for this token.  So, the center
+of the ellipse is used instead.  Keywords C<width> and C<height> can be
+used for the image width and height respectively, and the coordinates
+C<X> and C<Y> can be the standard language left, middle, right, top, center,
+and bottom mnemonics.  Also, percentages can be used if followed with a
+percent (%) sign.  Note additionally that the mnemonics and percentages will
+place the ellipse such that it should be entirely inside the viewable area.
+If you want to have it extend beyond the viewable area, use exact numeric
+coordinates.
 
 =cut
 
-$M{'simple:video:agring'}='agring/?(.*)';
-$F{'simple:video:agring'}=sub {
+$M{'simple:video:vignette'}='vignette/?([\w%:x/]*)';
+$F{'simple:video:vignette'}=sub {
 	my($node, $args)=@_;
-	my($x, $y)=($node->{'width'}/2, $node->{'height'}/2);
-	my($radius)=$x<$y ? $x : $y;
-	my(@lengths)=();
-	my($size)=undef;
-	my(@ring)=('format=yuva420p');
+	my($a, $b, $x, $y)=($node->{'width'}/2, $node->{'height'}/2) x 2;
+	my($size)=2;
+	my(@vignette)=('format=yuva420p');
 	my($alpha);
 
 	foreach(split(m|/|, $args)) {
-		if(m/(\d+)[x:](\d+)/) {
-			$x=$1;
-			$y=$2;
-			$radius=List::Util::min(
-				$x, $node->{'width'}-$x, $y, $node->{'height'}-$y);
+		if(($a, $b, $x, $y)=m/(\w+%?)[x:](\w+%?)[x:](\w+%?)[x:](\w+%?)/) {
+			if($a=~m/width/i) {
+				$a=$node->{'width'}/2;
+			} elsif($a=~m/(\d+)%/) {
+				$a=$node->{'width'}*$1/100;
+			} else {
+				$a/=2;
+			}
+
+			if($b=~m/height/i) {
+				$b=$node->{'height'}/2;
+			} elsif($b=~m/(\d+)%/) {
+				$b=$node->{'height'}*$1/100;
+			} else {
+				$b/=2;
+			}
+
+			if($x=~m/left/i) {
+				$x=$a;
+			} elsif($x=~m/middle|center/) {
+				$x=$node->{'width'}/2;
+			} elsif($x=~m/right/) {
+				$x=$node->{'width'}-$a;
+			} elsif($x=~m/(\d+)%/) {
+				$x=($node->{'width'}-$a*2)*$1/100+$a;
+			}
+
+			if($y=~m/top/i) {
+				$y=$b;
+			} elsif($y=~m/middle|center/) {
+				$y=$node->{'height'}/2;
+			} elsif($y=~m/bottom/) {
+				$y=$node->{'height'}-$b;
+			} elsif($y=~m/(\d+)%/) {
+				$y=($node->{'height'}-$b*2)*$1/100+$b;
+			}
 		} elsif(m/(\d+%)/) {
-			$size=$1;
+			$size=($1/100)*$b*2;
 		} elsif(m/(\d+)/) {
-			push(@lengths, $1);
+			$size=$1;
 		}
 	}
 
-	if(@lengths>1) {
-		($size, $radius)=sort(@lengths);
-		$radius/=2;
-	} elsif(@lengths==1) {
-		if($size) {
-			$radius=$lengths[0];
-			$radius/=2;
-		} else {
-			$size=$lengths[0];
-		}
-	}
+	#I'm under no illusions that this equation is exactly correct to measure
+	#the length of the border region.  But, it is surprisingly close enough
+	#for the use case and works enough as long as the ellipse isn't too
+	#oblong.
 
-	$size=$radius * 2 * $1/100 if($size=~m/(\d+)%/);
-	$size=2 unless($size);
-
-	$alpha=&fmt('max(min((#{R}-hypot(X-#{X},Y-#{Y}))*#{S},255),0)', {
-		'X'	=> $x,
-		'Y'	=> $y,
-		'R'	=> $radius,
+	$alpha=&fmt('max(min(#{H}*(1-sqrt(#{T}+#{C}))*#{S},255),0)', {
+		'X'	=> "(X-$x)",
+		'Y'	=> "(Y-$y)",
+		'Rm'	=> List::Util::min($a,$b),
+		'H'	=> "max(hypot(#{X},#{Y}),#{Rm})",
+		'T'	=> "(#{X}^2/$a^2)",
+		'C'	=> "(#{Y}^2/$b^2)",
 		'S'	=> 255/$size,
 	});
 
-	push(@ring, "geq='lum=p(X,Y):a=$alpha'");
+	push(@vignette, "geq='lum=p(X,Y):a=$alpha'");
 
-	return(@ring);
+	return(@vignette);
 };
 
 =item fade-in[/time]
@@ -1872,7 +1960,7 @@ $F{'complex:overlay'}=sub {
 	my($main)=$node->{'tree'}[0];
 	my($over)=$node->{'tree'}[1];
 	my($x, $y, $eval)=(0, 0, 'init');
-	my($alpha, $color)=($ARG{'overlay'}, undef);
+	my($alpha, $color)=(undef, undef);
 	my($vatop)=&next_labels($node, 'video' => 1);
 	my(%coords)=(
 		'w'		=> 'W',
@@ -1886,6 +1974,7 @@ $F{'complex:overlay'}=sub {
 	$node->{'length'}=List::Util::min($main->{'length'}, $over->{'length'});
 	($node->{'video'}, $node->{'audio'})=&next_labels($node);
 
+	$config=join('/', $ARG{'overlay'}, $config) if($ARG{'overlay'});
 	foreach my $option (split(m|(?<!\\)/|, $config)) {
 		$option=~s|\\+/|/|g;
 
@@ -2320,7 +2409,7 @@ my(@ORDER)=qw(
 	simple:video:flip
 	simple:video:rotate
 	simple:video:agframe
-	simple:video:agring
+	simple:video:vignette
 	simple:video:ffmpeg
 );
 

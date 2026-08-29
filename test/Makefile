@@ -266,7 +266,7 @@ softlayer.mp4: life.mp4 groovy.mp4
 circlecrop.mp4: TEXT=Crop a circle out of an image
 circlecrop.mp4: wind.mp4
 	$(CLIPS) generate/1920:1080/orange 0-10 %/90%/middle:center wind.mp4 \
-		agring/640/24 3-13
+		vignette/640:640:middle:center/24 3-13
 
 #######################
 #ODD BALLS
