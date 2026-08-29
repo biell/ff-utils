@@ -1465,11 +1465,12 @@ $F{'simple:video:vignette'}=sub {
 	my($alpha);
 
 	foreach(split(m|/|, $args)) {
-		if(($a, $b, $x, $y)=m/(\w+%?)[x:](\w+%?)[x:](\w+%?)[x:](\w+%?)/) {
+		if(m/(\w+%?)[x:](\w+%?)[x:](\w+%?)[x:](\w+%?)/) {
+			($a, $b, $x, $y)=($1, $2, $3, $4);
 			if($a=~m/width/i) {
 				$a=$node->{'width'}/2;
 			} elsif($a=~m/(\d+)%/) {
-				$a=$node->{'width'}*$1/100;
+				$a=$node->{'width'}/2*$1/100;
 			} else {
 				$a/=2;
 			}
@@ -1477,7 +1478,7 @@ $F{'simple:video:vignette'}=sub {
 			if($b=~m/height/i) {
 				$b=$node->{'height'}/2;
 			} elsif($b=~m/(\d+)%/) {
-				$b=$node->{'height'}*$1/100;
+				$b=$node->{'height'}/2*$1/100;
 			} else {
 				$b/=2;
 			}
