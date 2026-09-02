@@ -217,10 +217,7 @@ tteffect2.mp4:
 
 carousel.mp4: TEXT=A left scrolling parade of video clips
 carousel.mp4: life-vert.mp4 scroll-vert.mp4
-	$(CLIPS) -r:in 1080:1920 -1 src/free.mp4 -2 life-vert.mp4      \
-		-3 src/walking.mp4 -4 scroll-vert.mp4                     \
-		[1] 0-5  /5/L [2] 0-10 /5/L  [3] 0-10 /5/L  [4] 0-10 /5/L \
-		[1] 5-15 /5/L [2] 10-20 /5/L [3] 0-10 /5/L  [4] 10-15 
+	$(CLIPS) -c command-test.clips
 
 blur.mp4: TEXT=Perform a blur-in and blur-out on a double speed video
 blur.mp4: gradients.mp4

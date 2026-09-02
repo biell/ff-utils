@@ -2,7 +2,7 @@
 #by on the screen.
 
 ; Options:
--r:in 1080:1920    # Force the resolution on all input images to HD
+-r:in 1080:1920    # Force the resolution on all input images to vertical VHD
 
 ; Files:
 -1 src/free.mp4

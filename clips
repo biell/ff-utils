@@ -18,6 +18,7 @@ use Data::Dumper;
 use Pod::Usage;
 use File::Temp;
 use Digest::MD5;
+use Term::ReadKey;
 use FFUtils;
 
 =head1 SYNOPSIS
@@ -42,82 +43,50 @@ standard method of placing the filename on the command-line when it is
 to become named.  Additionally, when used, the named file becomes the active
 one for the next clip segment specification.
 
-=item -I or -implied
+=item -A or -audio-only
 
-Assume for every input file that an implied C<0-> (full file) clip is
-requested.  This is a lazy sauce option that is mostly useful for wildcards.
+Produce only the audio output, no video
 
-Note 1: that if you also specify a clip, it will also be part of the output.
-Note 2: this feature does not work with the numbered placeholders mentioned
-above.  So, you can use that for exceptions that shouldn't specify the entire
-file length as the clip.
+=item -c <file> or -commands=<file>
 
-=item -title=<text>
+Read F<file> as a B<clips> command-line and substitute the contents of
+that file for the location of this argument.  Please note that the contents
+of F<file> will always be read after all other command-line options are
+processed, effectively appending C<file> to the command-line.
 
-Set the output file's C<TITLE> metadata to C<text>.
+The C<file> can contain comment lines, which start with either the
+pound (#) or semi-colon (;) characters.  Newlines are treated as any other
+kind of whitespace character when parsed.
 
 =item -comment=<text>
 
 Set the output file's C<COMMENT> metadata to C<text>.
 
+=item -D or -token-help
+
+Display Token documentation only.
+
+=item -d or -debug
+
+Display more information to the screen about processing.  Most notably,
+print the L<ffmpeg(1)> command to the screen before execution.  This
+argument can be supplied sucessive times to increase the information
+displayed regarding B<clips> execution.
+
 =item -description=<text>
 
 Set the output file's C<DESCRIPTION> metadata to C<text>.
 
-=item -o <option> or -overlay=<option>
+=item -E <#> or -end=<#>
 
-When performing a video overlay use C<option> to affect the type and
-method of overlaying.  Three different kinds of overlay are possible
-depending on if C<option> is an integer, coordinates, or a color.
+End the video after C<#> time.  Time can be specified in any supported
+format.  This option is useful for testing just an initial portion of
+the video or to cut it off at a maximum time limit.
 
-=item -t <#> or -transition=<#>
+=item -e or -examples
 
-Change the default transition time for clip transitions from the default of
-C<0.8> seconds.
-
-=item -T <type> or -transition-type=<type>
-
-Change the default transition type from C<fade> to C<type>.  Transition
-type can either be specified using the one-letter abbreviations or the
-full name, as defined in L<ffmpeg-filters(1)>.
-
-=item -f <#> of -fade=<#>
-
-Change the default fade in and out time from C<3> seconds to C<#>.
-
-=item -s <#> or -speed=<#>
-
-Change the default for the C<speed> token from the default of 1 to C<#>.
-Note that this also changes the default starting speed for all videos.
-
-=item -v <#> or -volume=<#>
-
-Change the default for the C<volume> token from the default of 1 to C<#>.
-This option changes the default starting volume, also.
-
-=item -N or -normalize
-
-Run an audio normalize routine on all inputs.
-
-=item -r <W>:<H> or -resolution=<W>:<H>
-
-Force the inputs AND outputs to be specifically resolution of WxH.  This is
-most convenient if you have videos of different resolutions that you want to
-merge into one.  However, it can also be used if you want to change the
-overall output resolution.  You can use C<:> or C<x> as the delimiter.
-
-Note when using a horizontal or vertical group, this will scale each video
-to the desired output resolution, then scale the overall video back down
-to the desired size.  It works well as an easy button, but may produce
-unintended artifacts.
-
-=item -r:in <W>:<H> or -resolution:in=<W>:<H>
-
-Just like the previous option, but only force resolution on inputs.
-
-=item -r:out <W>:<H> or -resolution:out=<W>:<H>
-
-Just like the previous option, but only force resolution on outputs.
+Print the B<EXAMPLES> section of the manual.  This section is the best
+place to go to to learn about different ways to run B<clips>.
 
 =item -F <font> or -font=<font>
 
@@ -128,35 +97,35 @@ searches for fonts.  If that interface is unavailable (it uses Fontconfig)
 what works best is to specify a path to a TureType (TTF) font
 file.
 
-=item -S or -substitute
+=item -f <#> of -fade=<#>
 
-For files (input or output) substitue C<%l> formats similar to
-the L<date(1)> command.  This only works on files.
+Change the default fade in and out time from C<3> seconds to C<#>.
 
-=item -R <#> or -rate=<#>
+=item -H or --manual
 
-Specify that the resulting frame rate should be <#>.
+Print full manual.
 
-=item -A or -audio-only
+=item -h or -help
 
-Produce only the audio output, no video
+Print a usage statement help information from the manual.
 
-=item -P or -practice
+=item -I or -implied
 
-This option is just a synonym for C<-resolution=640:360 -rate=24>.
+Assume for every input file that an implied C<0-> (full file) clip is
+requested.  This is a lazy sauce option that is mostly useful for wildcards.
 
-=item -E <#> or -end=<#>
+Note 1: that if you also specify a clip, it will also be part of the output.
+Note 2: this feature does not work with the numbered placeholders mentioned
+above.  So, you can use that for exceptions that shouldn't specify the entire
+file length as the clip.
 
-End the video after C<#> time.  Time can be specified in any supported
-format.  This option is useful for testing just an initial portion of
-the video or to cut it off at a maximum time limit.
+=item -N or -normalize
 
-=item -U <userfile> or -user=<userfile>
+Run an audio normalize routine on all inputs.
 
-Supply a userfile of your own tokens to extend B<clips> capabilities or
-act as aliases/shortcuts for L<ffmpeg(1)> functions.  This overrides the
-default action of looking in the environment variable C<CLIPS_USERFILE>
-or F<~/.userfilters.clips> (in that order).
+=item -n or -dry-run
+
+Display information about what would be done, then exit.
 
 =item -O <options> or -ffmpeg=<options>
 
@@ -165,6 +134,16 @@ this is nice to specify which encoder, muxer, etc to use.  Note that
 this optin can be used multiple times, but also, any whitespace within
 the argument C<options> string will be used to seperate L<ffmpeg(1)>
 arguments.
+
+=item -o <option> or -overlay=<option>
+
+When performing a video overlay use C<option> to affect the type and
+method of overlaying.  Three different kinds of overlay are possible
+depending on if C<option> is an integer, coordinates, or a color.
+
+=item -P or -practice
+
+This option is just a synonym for C<-resolution=640:360 -rate=24>.
 
 =item -print=<string>
 
@@ -193,37 +172,70 @@ values of C<string> are accepted:
 
 =back
 
-=item -n or -dry-run
+=item -R <#> or -rate=<#>
 
-Display information about what would be done, then exit.
+Specify that the resulting frame rate should be <#>.
 
-=item -d or -debug
+=item -r <W>:<H> or -resolution=<W>:<H>
 
-Display more information to the screen about processing.  Most notably,
-print the L<ffmpeg(1)> command to the screen before execution.  This
-argument can be supplied sucessive times to increase the information
-displayed regarding B<clips> execution.
+Force the inputs AND outputs to be specifically resolution of WxH.  This is
+most convenient if you have videos of different resolutions that you want to
+merge into one.  However, it can also be used if you want to change the
+overall output resolution.  You can use C<:> or C<x> as the delimiter.
+
+Note when using a horizontal or vertical group, this will scale each video
+to the desired output resolution, then scale the overall video back down
+to the desired size.  It works well as an easy button, but may produce
+unintended artifacts.
+
+=item -r:in <W>:<H> or -resolution:in=<W>:<H>
+
+Just like the previous option, but only force resolution on inputs.
+
+=item -r:out <W>:<H> or -resolution:out=<W>:<H>
+
+Just like the previous option, but only force resolution on outputs.
+
+=item -S or -substitute
+
+For files (input or output) substitue C<%l> formats similar to
+the L<date(1)> command.  This only works on files.
+
+=item -s <#> or -speed=<#>
+
+Change the default for the C<speed> token from the default of 1 to C<#>.
+Note that this also changes the default starting speed for all videos.
+
+=item -T <type> or -transition-type=<type>
+
+Change the default transition type from C<fade> to C<type>.  Transition
+type can either be specified using the one-letter abbreviations or the
+full name, as defined in L<ffmpeg-filters(1)>.
+
+=item -t <#> or -transition=<#>
+
+Change the default transition time for clip transitions from the default of
+C<0.8> seconds.
+
+=item -title=<text>
+
+Set the output file's C<TITLE> metadata to C<text>.
+
+=item -U <userfile> or -user=<userfile>
+
+Supply a userfile of your own tokens to extend B<clips> capabilities or
+act as aliases/shortcuts for L<ffmpeg(1)> functions.  This overrides the
+default action of looking in the environment variable C<CLIPS_USERFILE>
+or F<~/.userfilters.clips> (in that order).
 
 =item -V or -version
 
 Display Version and exit.
 
-=item -D or -token-help
+=item -v <#> or -volume=<#>
 
-Display Token documentation only.
-
-=item -e or -examples
-
-Print the B<EXAMPLES> section of the manual.  This section is the best
-place to go to to learn about different ways to run B<clips>.
-
-=item -h or -help
-
-Print a usage statement help information from the manual.
-
-=item -H or --manual
-
-Print full manual.
+Change the default for the C<volume> token from the default of 1 to C<#>.
+This option changes the default starting volume, also.
 
 =back
 
@@ -231,6 +243,7 @@ Print full manual.
 
 my($COLOR_RE)=qr{(?i)#[\da-f]{6,8}|0x[\da-f]{6,8}|[a-z]+@[\d.]+|[a-z]+};
 
+my($COMMAND)='';
 my(@TOKENS)=();
 my($DST)=undef;
 my(%SOURCES)=();
@@ -246,36 +259,38 @@ my(%ARG)=(
 );
 
 my(@OPTIONS)=qw(
-	title=s
+	audio-only|A
 	comment=s
+	token-help|tokenhelp|D
+	debug|verbose|d+
 	description=s
-	implied|I
-	overlay|o=s
-	transition|transition-time|transitions|t=f
-	transition-type|transitiontype|ttype|T=s
+	end|E=s
+	examples|example|e
 	fade|fade-time|fadetime|f=f
-	speed|speedup|tempo|s=f
-	volume|vol|v=f
+	manual|H
+	help|?|h
+	implied|I
 	normalize|normal|norm|N
+	dry-run|dryrun|n
+	ffmpeg|options|O=s@
+	overlay|o=s
+	practice|P
+	print=s@
+	rate|framerate|frame-rate|fps|R=f
 	res|resolution|geometry|r=s
 	rout|r-out|res-out|resolution-out=s
 	rin|r-in|res-in|resolution-in=s
-	rate|framerate|frame-rate|fps|R=f
 	format|substitute|sub|S
-	audio-only|A
-	practice|P
-	end|E=s
-	ffmpeg|options|O=s@
+	speed|speedup|tempo|s=f
+	transition-type|transitiontype|ttype|T=s
+	transition|transition-time|transitions|t=f
+	title=s
 	userfile|aliases|alias|U=s
-	print=s@
-	dry-run|dryrun|n
-	debug|verbose|d+
 	version|V
-	token-help|tokenhelp|D
-	examples|example|e
-	help|?|h
-	manual|H
+	volume|vol|v=f
 );
+
+ReadMode(1);
 
 sub lookup_file {
 	my($file)=@_;
@@ -304,6 +319,29 @@ my(%OPTIONS)=(
 	},
 	'font|F=s' => sub {
 		push(@TOKENS, join('/', 'font', $_[1]));
+	},
+	'commands|command|command-file|c=s' => sub {
+		local($_);
+		my($opt, $file)=@_;
+		my($commands)=IO::Handle->new;
+		my(@program)=();
+
+		open($commands, '<', $file);
+		while(<$commands>) {
+			chomp;
+
+			s/#.*$//;
+			next if(m/^\s*[#;]/);
+			next if(m/^\s*$/);
+
+			s/-+([a-z]+):([a-z]+)\b/-$1-$2/ig;
+
+			push(@program, $_);
+		}
+		close($commands);
+
+		$COMMAND=join(' ', @program);
+		print "\n\n|\n$COMMAND\n|\n";
 	},
 	'<>'	=> sub {	#This routine essentially doubles as the pre-processor
 			local($_)=@_;
@@ -358,10 +396,13 @@ for my $opt (1 .. 99) {
 	$OPTIONS{"$opt=s"}=$OPTIONS{'0=s'};
 }
 
-s/^-([a-z]+):([a-z]+)/-$1-$2/ foreach(@ARGV);	#Fixup for colons in options
+s/^-+([a-z]+):([a-z]+)/-$1-$2/i foreach(@ARGV);	#Fixup for colons in options
 
 Getopt::Long::Configure('bundling_override');
-unless(GetOptions(\%ARG, @OPTIONS, %OPTIONS)) {
+unless(Getopt::Long::GetOptions(\%ARG, @OPTIONS, %OPTIONS)) {
+	pod2usage(-verbose => 1, -exitval => 1);
+}
+unless(Getopt::Long::GetOptionsFromString($COMMAND, \%ARG, @OPTIONS, %OPTIONS)) {
 	pod2usage(-verbose => 1, -exitval => 1);
 }
 
@@ -2427,7 +2468,7 @@ in the F<UserFile>.
 
 All non-blank lines not matching the following will cause errors:
 
-        <#|;|//>[Comment text]
+        <#|;>[Comment text]
         user:<audio|video>:<token>[/X=a][...] <filtername>[=options][,...]
         user:transition:<key>                 <xfade transition name>
 
@@ -3405,6 +3446,8 @@ if($DST=~m/^(mpv|preview|watch|-)$/i) {
 if($ARG{'dry-run'}) {
 	print "</DRY-RUN>\n";
 }
+
+ReadMode(0);
 
 =head1 ENVIRONMENT
 
