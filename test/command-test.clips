@@ -1,0 +1,23 @@
+#Clips test script to create a carousel effect of images scrolling
+#by on the screen.
+
+; Options:
+-r:in 1080:1920    # Force the resolution on all input images to HD
+
+; Files:
+-1 src/free.mp4
+-2 life-vert.mp4
+-3 src/walking.mp4
+-4 scroll-vert.mp4
+
+; Commands:
+[1] 0-5  /5/L
+[2] 0-10 /5/L
+[3] 0-10 /5/L
+[4] 0-10 /5/L
+
+[1] 5-15 /5/L
+[2] 10-20 /5/L
+[3] 0-10 /5/L
+[4] 10-15 
+
