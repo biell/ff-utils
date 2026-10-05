@@ -1508,6 +1508,7 @@ $F{'simple:video:vignette'}=sub {
 	foreach(split(m|/|, $args)) {
 		if(m/(\w+%?)[x:](\w+%?)[x:](\w+%?)[x:](\w+%?)/) {
 			($a, $b, $x, $y)=($1, $2, $3, $4);
+
 			if($a=~m/width/i) {
 				$a=$node->{'width'}/2;
 			} elsif($a=~m/(\d+)%/) {
@@ -1674,7 +1675,7 @@ $F{'complex:blur'}=sub {
 		'T'	=> lc($type),
 		'D'	=> $length,
 		'C'	=> 'qua',
-		'N'	=> 60,
+		'N'	=> 80,
 		'B'	=> -0.15,
 
 		'Si'	=> 0,
@@ -2606,10 +2607,10 @@ sub run_simple_user {
 	my(@params)=split(m|/|, $UF{$id}[0]);
 	my(@keys)=();
 	my($map)={
-		'_W'	=> $node->{'width'},
-		'_H'	=> $node->{'height'},
-		'_L'	=> $node->{'length'},
-		'_F'	=> $node->{'fps'},
+		'_W'	=> $node->{'width'} || 0,
+		'_H'	=> $node->{'height'} || 0,
+		'_L'	=> $node->{'length'} || 0,
+		'_F'	=> $node->{'fps'} || 0,
 	};
 
 	foreach my $param (@params) {
@@ -3265,6 +3266,7 @@ $ROOT=&parse(@TOKENS);
 &compute_lengths($ROOT);
 
 push(@FFPROGRAM, &map_outputs($ROOT));
+
 if($ARG{'rout'}) {
 	push(@FFPROGRAM, '-s', $ARG{'rout'});
 } elsif($ARG{'res'}) {
@@ -3441,6 +3443,7 @@ if($DST=~m/^(mpv|preview|watch|-)$/i) {
 		printf("\nOutput file:\n'%s' (%s)\n", $DST,
 			FFUtils::secs2time($ROOT->{'length'}));
 	}
+
 }
 
 if($ARG{'dry-run'}) {
@@ -3448,6 +3451,8 @@ if($ARG{'dry-run'}) {
 }
 
 ReadMode(0);
+
+print "\n";
 
 =head1 ENVIRONMENT
 
